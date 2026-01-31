@@ -1,0 +1,46 @@
+{
+  "name": "task-sync",
+  "version": "0.1.0",
+  "description": "Sync tasks between Microsoft To Do and Google Tasks",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/salaamdev/task-sync.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/salaamdev/task-sync/issues"
+  },
+  "homepage": "https://github.com/salaamdev/task-sync#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "task-sync": "dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^22.19.7",
+    "eslint": "^9.39.2",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^2.1.9"
+  }
+}
