@@ -18,7 +18,7 @@ describe('SyncEngine', () => {
     const b = new MockProvider({ name: 'mockB', tasks: [] });
 
     const report = await engine.sync(a, b, { dryRun: true });
-    expect(report.actions.some((x) => x.action === 'would-create')).toBe(true);
+    expect(report.actions.some((x) => x.kind === 'create' && x.executed === false)).toBe(true);
   });
 
   it('tombstones completed tasks and deletes on the other side (dry-run)', async () => {
@@ -41,6 +41,6 @@ describe('SyncEngine', () => {
     await store.save(s);
 
     const report = await engine.sync(a, b, { dryRun: true });
-    expect(report.actions.some((x) => x.action === 'would-delete')).toBe(true);
+    expect(report.actions.some((x) => x.kind === 'delete' && x.executed === false)).toBe(true);
   });
 });

@@ -6,6 +6,10 @@ export const EnvSchema = z.object({
   TASK_SYNC_PROVIDER_A: z.enum(['google', 'microsoft']).optional(),
   TASK_SYNC_PROVIDER_B: z.enum(['google', 'microsoft']).optional(),
 
+  // behavior
+  TASK_SYNC_LOG_LEVEL: z.enum(['silent', 'error', 'warn', 'info', 'debug']).optional(),
+  TASK_SYNC_STATE_DIR: str.optional(),
+
   // Google Tasks (scaffold)
   TASK_SYNC_GOOGLE_CLIENT_ID: str.optional(),
   TASK_SYNC_GOOGLE_CLIENT_SECRET: str.optional(),

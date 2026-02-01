@@ -9,17 +9,33 @@ export interface SyncOptions {
   conflictPolicy?: ConflictPolicy;
 }
 
+export type SyncActionKind = 'create' | 'update' | 'delete' | 'recreate' | 'noop';
+
+export interface SyncAction {
+  kind: SyncActionKind;
+  executed: boolean;
+  source: { provider: string; id: string };
+  target: { provider: string; id?: string };
+  title?: string;
+  detail: string;
+}
+
 export interface SyncReport {
   dryRun: boolean;
   providerA: string;
   providerB: string;
   lastSyncAt?: string;
   newLastSyncAt: string;
-  actions: Array<{ action: string; detail: string }>;
+  counts: Record<SyncActionKind, number>;
+  actions: SyncAction[];
 }
 
 function newer(a: string, b: string) {
   return Date.parse(a) > Date.parse(b);
+}
+
+function indexById(tasks: Task[]) {
+  return new Map(tasks.map((t) => [t.id, t] as const));
 }
 
 export class SyncEngine {
@@ -30,20 +46,59 @@ export class SyncEngine {
     const state = await this.store.load();
 
     const lastSyncAt = state.lastSyncAt;
-    const actions: SyncReport['actions'] = [];
+    const actions: SyncAction[] = [];
 
-    const [aTasks, bTasks] = await Promise.all([a.listTasks(lastSyncAt), b.listTasks(lastSyncAt)]);
+    const counts: SyncReport['counts'] = {
+      create: 0,
+      update: 0,
+      delete: 0,
+      recreate: 0,
+      noop: 0,
+    };
+
+    const push = (a: SyncAction) => {
+      actions.push(a);
+      counts[a.kind]++;
+    };
+
+    // For MVP simplicity: pull incremental changes for deciding what to reconcile,
+    // plus a full snapshot to cheaply lookup any target task by id.
+    const [aChanges, bChanges, aAll, bAll] = await Promise.all([
+      a.listTasks(lastSyncAt),
+      b.listTasks(lastSyncAt),
+      a.listTasks(undefined),
+      b.listTasks(undefined),
+    ]);
+
+    const aIndex = indexById(aAll);
+    const bIndex = indexById(bAll);
 
     // 1) Process tasks from A -> B
-    for (const t of aTasks) {
+    for (const t of aChanges) {
       if (this.store.isTombstoned(state, a.name, t.id)) continue;
-      await this.reconcileOne({ source: a, target: b, state, task: t, dryRun, actions });
+      await this.reconcileOne({
+        source: a,
+        target: b,
+        targetIndex: bIndex,
+        state,
+        task: t,
+        dryRun,
+        push,
+      });
     }
 
     // 2) Process tasks from B -> A
-    for (const t of bTasks) {
+    for (const t of bChanges) {
       if (this.store.isTombstoned(state, b.name, t.id)) continue;
-      await this.reconcileOne({ source: b, target: a, state, task: t, dryRun, actions });
+      await this.reconcileOne({
+        source: b,
+        target: a,
+        targetIndex: aIndex,
+        state,
+        task: t,
+        dryRun,
+        push,
+      });
     }
 
     const newLastSyncAt = new Date().toISOString();
@@ -56,6 +111,7 @@ export class SyncEngine {
       providerB: b.name,
       lastSyncAt,
       newLastSyncAt,
+      counts,
       actions,
     };
   }
@@ -63,12 +119,13 @@ export class SyncEngine {
   private async reconcileOne(params: {
     source: TaskProvider;
     target: TaskProvider;
+    targetIndex: Map<string, Task>;
     state: SyncState;
     task: Task;
     dryRun: boolean;
-    actions: Array<{ action: string; detail: string }>;
+    push: (a: SyncAction) => void;
   }) {
-    const { source, target, state, task, dryRun, actions } = params;
+    const { source, target, targetIndex, state, task, dryRun, push } = params;
 
     const map = this.store.ensureMapping(state, source.name, task.id);
     const targetId = map.byProvider[target.name];
@@ -79,18 +136,35 @@ export class SyncEngine {
       if (targetId) this.store.addTombstone(state, target.name, targetId);
 
       if (targetId) {
-        actions.push({
-          action: dryRun ? 'would-delete' : 'delete',
+        push({
+          kind: 'delete',
+          executed: !dryRun,
+          source: { provider: source.name, id: task.id },
+          target: { provider: target.name, id: targetId },
+          title: task.title,
           detail: `${target.name}:${targetId} due to ${source.name}:${task.id} status=${task.status}`,
         });
         if (!dryRun) await target.deleteTask(targetId);
+      } else {
+        push({
+          kind: 'noop',
+          executed: false,
+          source: { provider: source.name, id: task.id },
+          target: { provider: target.name },
+          title: task.title,
+          detail: `tombstoned ${source.name}:${task.id} status=${task.status} (no mapped target)`,
+        });
       }
       return;
     }
 
     if (!targetId) {
-      actions.push({
-        action: dryRun ? 'would-create' : 'create',
+      push({
+        kind: 'create',
+        executed: !dryRun,
+        source: { provider: source.name, id: task.id },
+        target: { provider: target.name },
+        title: task.title,
         detail: `${target.name} from ${source.name}:${task.id} "${task.title}"`,
       });
 
@@ -108,16 +182,16 @@ export class SyncEngine {
       return;
     }
 
-    // If both sides exist, we do simple LWW based on updatedAt
-    // NOTE: This is intentionally minimal for MVP.
-    // A richer approach would compare field-by-field and/or keep per-field clocks.
-    const targetTasks = await target.listTasks(undefined);
-    const targetTask = targetTasks.find((t) => t.id === targetId);
+    const targetTask = targetIndex.get(targetId);
     if (!targetTask) {
       // mapping points to missing task -> re-create, unless tombstoned
       if (this.store.isTombstoned(state, target.name, targetId)) return;
-      actions.push({
-        action: dryRun ? 'would-recreate' : 'recreate',
+      push({
+        kind: 'recreate',
+        executed: !dryRun,
+        source: { provider: source.name, id: task.id },
+        target: { provider: target.name, id: targetId },
+        title: task.title,
         detail: `${target.name}:${targetId} missing; recreate from ${source.name}:${task.id}`,
       });
       if (!dryRun) {
@@ -134,9 +208,14 @@ export class SyncEngine {
       return;
     }
 
+    // If both sides exist, we do simple LWW based on updatedAt.
     if (newer(task.updatedAt, targetTask.updatedAt)) {
-      actions.push({
-        action: dryRun ? 'would-update' : 'update',
+      push({
+        kind: 'update',
+        executed: !dryRun,
+        source: { provider: source.name, id: task.id },
+        target: { provider: target.name, id: targetId },
+        title: task.title,
         detail: `${target.name}:${targetId} <= ${source.name}:${task.id} (LWW)`,
       });
       if (!dryRun) {
@@ -149,6 +228,15 @@ export class SyncEngine {
           updatedAt: task.updatedAt,
         });
       }
+    } else {
+      push({
+        kind: 'noop',
+        executed: false,
+        source: { provider: source.name, id: task.id },
+        target: { provider: target.name, id: targetId },
+        title: task.title,
+        detail: `no-op: ${source.name}:${task.id} not newer than ${target.name}:${targetId}`,
+      });
     }
   }
 }

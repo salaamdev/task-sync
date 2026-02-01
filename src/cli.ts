@@ -1,9 +1,14 @@
 import { Command } from 'commander';
 import { doctorReport, readEnv } from './config.js';
+import { loadEnvFiles } from './env.js';
+import { createLogger } from './log.js';
 import { MockProvider } from './providers/mock.js';
 import { GoogleTasksProvider } from './providers/google.js';
 import { MicrosoftTodoProvider } from './providers/microsoft.js';
 import { SyncEngine } from './sync/engine.js';
+import { JsonStore } from './store/jsonStore.js';
+
+loadEnvFiles();
 
 const program = new Command();
 
@@ -38,12 +43,16 @@ program
 program
   .command('sync')
   .description('Run sync engine')
-  .option('--dry-run', 'Run with mock providers and do not persist state')
-  .action(async (opts: { dryRun?: boolean }) => {
-    const engine = new SyncEngine();
+  .option('--dry-run', 'Use mock providers and do not persist state')
+  .option('--state-dir <dir>', 'Override state dir (default: .task-sync or TASK_SYNC_STATE_DIR)')
+  .option('--format <format>', 'Output format: pretty|json', 'pretty')
+  .action(async (opts: { dryRun?: boolean; stateDir?: string; format?: string }) => {
+    const env = readEnv();
+    const logger = createLogger(env.TASK_SYNC_LOG_LEVEL ?? 'info');
+
+    const engine = new SyncEngine(new JsonStore(opts.stateDir ?? env.TASK_SYNC_STATE_DIR));
 
     const dryRun = !!opts.dryRun;
-    const env = readEnv();
 
     if (!dryRun) {
       const dr = doctorReport(env);
@@ -106,9 +115,32 @@ program
             listId: env.TASK_SYNC_MS_LIST_ID,
           });
 
+    logger.info(`sync start (dryRun=${dryRun})`, { a: providerA.name, b: providerB.name });
+
     const report = await engine.sync(providerA, providerB, { dryRun });
 
-    console.log(JSON.stringify(report, null, 2));
+    if ((opts.format ?? 'pretty') === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(`task-sync report`);
+    console.log(`providers: ${report.providerA} <-> ${report.providerB}`);
+    console.log(`lastSyncAt: ${report.lastSyncAt ?? '(none)'}`);
+    console.log(`newLastSyncAt: ${report.newLastSyncAt}`);
+    console.log(`dryRun: ${report.dryRun}`);
+
+    console.log('\ncounts:');
+    for (const k of Object.keys(report.counts) as Array<keyof typeof report.counts>) {
+      console.log(`- ${k}: ${report.counts[k]}`);
+    }
+
+    console.log('\nactions:');
+    for (const a of report.actions) {
+      const exec = a.executed ? 'exec' : 'plan';
+      const tgt = a.target.id ? `${a.target.provider}:${a.target.id}` : a.target.provider;
+      console.log(`- [${exec}] ${a.kind} ${tgt} <= ${a.source.provider}:${a.source.id} ${a.title ? `"${a.title}"` : ''}`);
+    }
   });
 
 program.parseAsync(process.argv).catch((err) => {
