@@ -19,6 +19,7 @@ describe('SyncEngine', () => {
 
     const report = await engine.sync(a, b, { dryRun: true });
     expect(report.actions.some((x) => x.kind === 'create' && x.executed === false)).toBe(true);
+    expect(report.providers).toEqual(['mockA', 'mockB']);
   });
 
   it('tombstones completed tasks and deletes on the other side (dry-run)', async () => {
@@ -34,7 +35,7 @@ describe('SyncEngine', () => {
       tasks: [{ id: 'b1', title: 'B', status: 'active', updatedAt: new Date().toISOString() }],
     });
 
-    // pre-create mapping by running a dry sync once for active task to establish linkage
+    // pre-create mapping by storing linkage
     const s = await store.load();
     const map = store.ensureMapping(s, 'mockA', 'a1');
     store.upsertProviderId(s, map.canonicalId, 'mockB', 'b1');
@@ -42,5 +43,22 @@ describe('SyncEngine', () => {
 
     const report = await engine.sync(a, b, { dryRun: true });
     expect(report.actions.some((x) => x.kind === 'delete' && x.executed === false)).toBe(true);
+  });
+
+  it('3-way: plans create into both targets (dry-run)', async () => {
+    const store = new JsonStore(await mkdtemp(path.join(os.tmpdir(), 'task-sync-')));
+    const engine = new SyncEngine(store);
+
+    const now = new Date().toISOString();
+    const a = new MockProvider({ name: 'mockA', tasks: [{ id: 'a1', title: 'A', status: 'active', updatedAt: now }] });
+    const b = new MockProvider({ name: 'mockB', tasks: [] });
+    const c = new MockProvider({ name: 'habitica', tasks: [] });
+
+    const report = await engine.syncMany([a, b, c], { dryRun: true });
+
+    const creates = report.actions.filter((x) => x.kind === 'create');
+    // a1 should be created into both b and c
+    expect(creates.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(creates.map((x) => x.target.provider))).toEqual(new Set(['mockB', 'habitica']));
   });
 });

@@ -22,8 +22,7 @@ export interface SyncAction {
 
 export interface SyncReport {
   dryRun: boolean;
-  providerA: string;
-  providerB: string;
+  providers: string[];
   lastSyncAt?: string;
   newLastSyncAt: string;
   counts: Record<SyncActionKind, number>;
@@ -41,7 +40,19 @@ function indexById(tasks: Task[]) {
 export class SyncEngine {
   constructor(private store = new JsonStore()) {}
 
+  /**
+   * Back-compat: two-way sync.
+   */
   async sync(a: TaskProvider, b: TaskProvider, opts: SyncOptions = {}): Promise<SyncReport> {
+    return this.syncMany([a, b], opts);
+  }
+
+  /**
+   * N-way sync (MVP: 2-3 providers). For every provider, reconcile its changes into every other provider.
+   */
+  async syncMany(providers: TaskProvider[], opts: SyncOptions = {}): Promise<SyncReport> {
+    if (providers.length < 2) throw new Error('syncMany requires at least 2 providers');
+
     const dryRun = !!opts.dryRun;
     const state = await this.store.load();
 
@@ -61,44 +72,37 @@ export class SyncEngine {
       counts[a.kind]++;
     };
 
-    // For MVP simplicity: pull incremental changes for deciding what to reconcile,
-    // plus a full snapshot to cheaply lookup any target task by id.
-    const [aChanges, bChanges, aAll, bAll] = await Promise.all([
-      a.listTasks(lastSyncAt),
-      b.listTasks(lastSyncAt),
-      a.listTasks(undefined),
-      b.listTasks(undefined),
-    ]);
+    // Preload changes + snapshots for all providers.
+    const snapshots = new Map<string, { changes: Task[]; all: Task[]; index: Map<string, Task> }>();
 
-    const aIndex = indexById(aAll);
-    const bIndex = indexById(bAll);
+    await Promise.all(
+      providers.map(async (p) => {
+        const [changes, all] = await Promise.all([p.listTasks(lastSyncAt), p.listTasks(undefined)]);
+        snapshots.set(p.name, { changes, all, index: indexById(all) });
+      }),
+    );
 
-    // 1) Process tasks from A -> B
-    for (const t of aChanges) {
-      if (this.store.isTombstoned(state, a.name, t.id)) continue;
-      await this.reconcileOne({
-        source: a,
-        target: b,
-        targetIndex: bIndex,
-        state,
-        task: t,
-        dryRun,
-        push,
-      });
-    }
+    // For each provider -> reconcile into every other.
+    for (const source of providers) {
+      const snap = snapshots.get(source.name)!;
+      for (const task of snap.changes) {
+        if (this.store.isTombstoned(state, source.name, task.id)) continue;
 
-    // 2) Process tasks from B -> A
-    for (const t of bChanges) {
-      if (this.store.isTombstoned(state, b.name, t.id)) continue;
-      await this.reconcileOne({
-        source: b,
-        target: a,
-        targetIndex: aIndex,
-        state,
-        task: t,
-        dryRun,
-        push,
-      });
+        for (const target of providers) {
+          if (target.name === source.name) continue;
+
+          const targetSnap = snapshots.get(target.name)!;
+          await this.reconcileOne({
+            source,
+            target,
+            targetIndex: targetSnap.index,
+            state,
+            task,
+            dryRun,
+            push,
+          });
+        }
+      }
     }
 
     const newLastSyncAt = new Date().toISOString();
@@ -107,8 +111,7 @@ export class SyncEngine {
 
     return {
       dryRun,
-      providerA: a.name,
-      providerB: b.name,
+      providers: providers.map((p) => p.name),
       lastSyncAt,
       newLastSyncAt,
       counts,

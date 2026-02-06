@@ -1,4 +1,4 @@
-export type ProviderName = 'mockA' | 'mockB' | 'google' | 'microsoft';
+export type ProviderName = 'mockA' | 'mockB' | 'google' | 'microsoft' | 'habitica';
 
 export type TaskStatus = 'active' | 'completed' | 'deleted';
 
