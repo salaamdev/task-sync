@@ -85,9 +85,12 @@ export class HabiticaProvider implements TaskProvider {
   }
 
   private headers() {
+    // Habitica requires an x-client header in addition to the API user/key.
+    // Format: "<app-name> (<your-user-id-or-email>)". Keep it stable.
     return {
       'x-api-user': this.opts.userId,
       'x-api-key': this.opts.apiToken,
+      'x-client': 'task-sync (salaamdev)',
     };
   }
 

@@ -12,7 +12,12 @@ if (!clientId) {
   process.exit(2);
 }
 
-const scopes = ['offline_access', 'User.Read', 'Tasks.ReadWrite'];
+// Use Microsoft Graph resource scopes (required for consumer accounts and avoids ambiguous scope errors)
+const scopes = [
+  'offline_access',
+  'https://graph.microsoft.com/User.Read',
+  'https://graph.microsoft.com/Tasks.ReadWrite',
+];
 
 const authUrl = new URL(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/authorize`);
 authUrl.searchParams.set('client_id', clientId);

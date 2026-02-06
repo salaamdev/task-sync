@@ -21,6 +21,8 @@ interface MsTokenResponse {
   expires_in: number;
   ext_expires_in: number;
   access_token: string;
+  /** Microsoft may rotate refresh tokens. If present, you must use the new one going forward. */
+  refresh_token?: string;
 }
 
 interface GraphTodoList {
@@ -82,8 +84,8 @@ export class MicrosoftTodoProvider implements TaskProvider {
       client_id: this.opts.clientId,
       refresh_token: this.opts.refreshToken,
       grant_type: 'refresh_token',
-      // Keep scopes aligned with initial consent. Graph To Do requires Tasks.ReadWrite.
-      scope: 'offline_access Tasks.ReadWrite User.Read',
+      // Keep scopes aligned with initial consent. Use Graph resource scopes.
+      scope: 'offline_access https://graph.microsoft.com/Tasks.ReadWrite https://graph.microsoft.com/User.Read',
     });
 
     const url = `https://login.microsoftonline.com/${encodeURIComponent(this.opts.tenantId)}/oauth2/v2.0/token`;
@@ -99,6 +101,10 @@ export class MicrosoftTodoProvider implements TaskProvider {
     }
 
     const json = (await res.json()) as MsTokenResponse;
+
+    // Microsoft can rotate refresh tokens. Keep using the latest one in-memory so polling works.
+    if (json.refresh_token) this.opts.refreshToken = json.refresh_token;
+
     this.accessToken = { token: json.access_token, expMs: now + json.expires_in * 1000 };
     return json.access_token;
   }
