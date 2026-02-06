@@ -14,6 +14,9 @@ export const EnvSchema = z.object({
   TASK_SYNC_LOG_LEVEL: z.enum(['silent', 'error', 'warn', 'info', 'debug']).optional(),
   TASK_SYNC_STATE_DIR: str.optional(),
   TASK_SYNC_POLL_INTERVAL_MINUTES: z.coerce.number().int().positive().optional(),
+  TASK_SYNC_MODE: z.enum(['bidirectional', 'a-to-b-only', 'mirror']).optional(),
+  TASK_SYNC_TOMBSTONE_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  TASK_SYNC_HTTP_RPS: z.coerce.number().positive().optional(),
 
   // Google Tasks
   TASK_SYNC_GOOGLE_CLIENT_ID: str.optional(),

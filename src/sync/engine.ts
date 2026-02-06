@@ -1,12 +1,20 @@
+import { appendFile } from 'node:fs/promises';
 import type { Task } from '../model.js';
 import type { TaskProvider } from '../providers/provider.js';
-import { JsonStore, type SyncState } from '../store/jsonStore.js';
+import { JsonStore, type MappingRecord, type SyncState } from '../store/jsonStore.js';
+import { acquireLock } from '../store/lock.js';
 
 export type ConflictPolicy = 'last-write-wins';
+
+export type SyncMode = 'bidirectional' | 'a-to-b-only' | 'mirror';
 
 export interface SyncOptions {
   dryRun?: boolean;
   conflictPolicy?: ConflictPolicy;
+  /** Sync mode. Default: bidirectional. */
+  mode?: SyncMode;
+  /** Tombstone TTL in days. Default: 30. */
+  tombstoneTtlDays?: number;
 }
 
 export type SyncActionKind = 'create' | 'update' | 'delete' | 'recreate' | 'noop';
@@ -20,6 +28,14 @@ export interface SyncAction {
   detail: string;
 }
 
+export interface SyncConflict {
+  canonicalId: string;
+  field: 'title' | 'notes' | 'dueAt' | 'status';
+  providers: Array<{ provider: string; id: string; updatedAt: string; value: unknown }>;
+  winner: { provider: string; id: string; updatedAt: string };
+  overwritten: Array<{ provider: string; id: string }>;
+}
+
 export interface SyncReport {
   dryRun: boolean;
   providers: string[];
@@ -27,6 +43,9 @@ export interface SyncReport {
   newLastSyncAt: string;
   counts: Record<SyncActionKind, number>;
   actions: SyncAction[];
+  conflicts: SyncConflict[];
+  errors: Array<{ provider: string; stage: 'listChanges' | 'listAll' | 'write'; error: string }>;
+  durationMs: number;
 }
 
 function newer(a: string, b: string) {
@@ -37,209 +56,466 @@ function indexById(tasks: Task[]) {
   return new Map(tasks.map((t) => [t.id, t] as const));
 }
 
+function norm(s?: string) {
+  return (s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function matchKey(t: Task) {
+  return `${norm(t.title)}\n${norm(t.notes)}`;
+}
+
+function pickProvidersByMode(mode: SyncMode, providers: TaskProvider[]) {
+  if (mode === 'bidirectional') return { sources: providers, targets: providers };
+  if (providers.length < 2) return { sources: providers, targets: providers };
+
+  const a = providers[0];
+  const rest = providers.slice(1);
+  if (mode === 'a-to-b-only') return { sources: [a], targets: rest };
+  // mirror: A is source of truth, so only apply A -> others, and never write back to A
+  return { sources: [a], targets: rest };
+}
+
+type Snapshot = { changes: Task[]; all: Task[]; index: Map<string, Task>; changeIndex: Map<string, Task> };
+
 export class SyncEngine {
   constructor(private store = new JsonStore()) {}
 
-  /**
-   * Back-compat: two-way sync.
-   */
+  /** Back-compat: two-way sync. */
   async sync(a: TaskProvider, b: TaskProvider, opts: SyncOptions = {}): Promise<SyncReport> {
     return this.syncMany([a, b], opts);
   }
 
-  /**
-   * N-way sync (MVP: 2-3 providers). For every provider, reconcile its changes into every other provider.
-   */
+  /** N-way sync. */
   async syncMany(providers: TaskProvider[], opts: SyncOptions = {}): Promise<SyncReport> {
+    const started = Date.now();
     if (providers.length < 2) throw new Error('syncMany requires at least 2 providers');
 
     const dryRun = !!opts.dryRun;
-    const state = await this.store.load();
+    const mode: SyncMode = opts.mode ?? 'bidirectional';
+    const tombstoneTtlDays = opts.tombstoneTtlDays ?? 30;
 
-    const lastSyncAt = state.lastSyncAt;
-    const actions: SyncAction[] = [];
+    const lock = await acquireLock(this.store.getDir());
+    try {
+      const state = await this.store.load();
+      const lastSyncAt = state.lastSyncAt;
 
-    const counts: SyncReport['counts'] = {
-      create: 0,
-      update: 0,
-      delete: 0,
-      recreate: 0,
-      noop: 0,
-    };
+      const actions: SyncAction[] = [];
+      const conflicts: SyncConflict[] = [];
+      const errors: SyncReport['errors'] = [];
 
-    const push = (a: SyncAction) => {
-      actions.push(a);
-      counts[a.kind]++;
-    };
+      const counts: SyncReport['counts'] = {
+        create: 0,
+        update: 0,
+        delete: 0,
+        recreate: 0,
+        noop: 0,
+      };
 
-    // Preload changes + snapshots for all providers.
-    const snapshots = new Map<string, { changes: Task[]; all: Task[]; index: Map<string, Task> }>();
+      const push = (a: SyncAction) => {
+        actions.push(a);
+        counts[a.kind]++;
+      };
 
-    await Promise.all(
-      providers.map(async (p) => {
-        const [changes, all] = await Promise.all([p.listTasks(lastSyncAt), p.listTasks(undefined)]);
-        snapshots.set(p.name, { changes, all, index: indexById(all) });
-      }),
-    );
+      // 1) Prune expired tombstones
+      this.store.pruneExpiredTombstones(state, tombstoneTtlDays);
 
-    // For each provider -> reconcile into every other.
-    for (const source of providers) {
-      const snap = snapshots.get(source.name)!;
-      for (const task of snap.changes) {
-        if (this.store.isTombstoned(state, source.name, task.id)) continue;
+      // 2) Preload snapshots for all providers (best-effort)
+      const snapshots = new Map<string, Snapshot>();
+      const listAllFailed = new Set<string>();
 
-        for (const target of providers) {
-          if (target.name === source.name) continue;
-
-          const targetSnap = snapshots.get(target.name)!;
-          await this.reconcileOne({
-            source,
-            target,
-            targetIndex: targetSnap.index,
-            state,
-            task,
-            dryRun,
-            push,
+      await Promise.all(
+        providers.map(async (p) => {
+          let changes: Task[] = [];
+          let all: Task[] = [];
+          try {
+            changes = await p.listTasks(lastSyncAt);
+          } catch (e) {
+            errors.push({
+              provider: p.name,
+              stage: 'listChanges',
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+          try {
+            all = await p.listTasks(undefined);
+          } catch (e) {
+            listAllFailed.add(p.name);
+            errors.push({
+              provider: p.name,
+              stage: 'listAll',
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+          snapshots.set(p.name, {
+            changes,
+            all,
+            index: indexById(all),
+            changeIndex: indexById(changes),
           });
+        }),
+      );
+
+      // Only reconcile among providers we can at least read a full snapshot for.
+      const healthyProviders = providers.filter((p) => !listAllFailed.has(p.name));
+
+      // 3) Cold start: if no state, match tasks by title+notes across providers to avoid dupes.
+      if (!state.lastSyncAt && state.mappings.length === 0) {
+        const buckets = new Map<string, Array<{ provider: string; task: Task }>>();
+        for (const p of healthyProviders) {
+          const snap = snapshots.get(p.name)!;
+          for (const t of snap.all) {
+            if (t.status === 'deleted') continue;
+            const k = matchKey(t);
+            if (!buckets.has(k)) buckets.set(k, []);
+            buckets.get(k)!.push({ provider: p.name, task: t });
+          }
+        }
+
+        for (const group of buckets.values()) {
+          if (group.length < 2) continue;
+          // create a single mapping across all matching tasks
+          const first = group[0]!;
+          const rec = this.store.ensureMapping(state, first.provider as any, first.task.id);
+          for (const g of group.slice(1)) {
+            rec.byProvider[g.provider as any] = g.task.id;
+          }
+          rec.canonical = {
+            title: first.task.title,
+            notes: first.task.notes,
+            dueAt: first.task.dueAt,
+            status: first.task.status,
+            metadata: first.task.metadata,
+            updatedAt: first.task.updatedAt,
+          };
         }
       }
-    }
 
-    const newLastSyncAt = new Date().toISOString();
-    state.lastSyncAt = newLastSyncAt;
-    if (!dryRun) await this.store.save(state);
+      // Helper: get mapping record for a provider task id.
+      const mappingFor = (provider: string, id: string): MappingRecord =>
+        this.store.ensureMapping(state, provider as any, id);
 
-    return {
-      dryRun,
-      providers: providers.map((p) => p.name),
-      lastSyncAt,
-      newLastSyncAt,
-      counts,
-      actions,
-    };
-  }
+      // 4) Zombie prevention (delete-wins): process deletions/completions first.
+      const isTerminal = (t: Task) => t.status === 'deleted' || t.status === 'completed';
 
-  private async reconcileOne(params: {
-    source: TaskProvider;
-    target: TaskProvider;
-    targetIndex: Map<string, Task>;
-    state: SyncState;
-    task: Task;
-    dryRun: boolean;
-    push: (a: SyncAction) => void;
-  }) {
-    const { source, target, targetIndex, state, task, dryRun, push } = params;
+      const tombstoneCanonicalIds = new Set<string>();
 
-    const map = this.store.ensureMapping(state, source.name, task.id);
-    const targetId = map.byProvider[target.name];
+      for (const p of healthyProviders) {
+        const snap = snapshots.get(p.name)!;
+        for (const t of snap.changes) {
+          if (!isTerminal(t)) continue;
+          const map = mappingFor(p.name, t.id);
+          tombstoneCanonicalIds.add(map.canonicalId);
 
-    // zombie prevention: completed/deleted tasks become tombstones
-    if (task.status === 'completed' || task.status === 'deleted') {
-      this.store.addTombstone(state, source.name, task.id);
-      if (targetId) this.store.addTombstone(state, target.name, targetId);
-
-      if (targetId) {
-        push({
-          kind: 'delete',
-          executed: !dryRun,
-          source: { provider: source.name, id: task.id },
-          target: { provider: target.name, id: targetId },
-          title: task.title,
-          detail: `${target.name}:${targetId} due to ${source.name}:${task.id} status=${task.status}`,
-        });
-        if (!dryRun) await target.deleteTask(targetId);
-      } else {
-        push({
-          kind: 'noop',
-          executed: false,
-          source: { provider: source.name, id: task.id },
-          target: { provider: target.name },
-          title: task.title,
-          detail: `tombstoned ${source.name}:${task.id} status=${task.status} (no mapped target)`,
-        });
+          // Tombstone all known provider ids for this canonical task.
+          for (const [prov, pid] of Object.entries(map.byProvider)) {
+            if (!pid) continue;
+            this.store.addTombstone(state, prov as any, pid);
+          }
+        }
       }
-      return;
-    }
 
-    if (!targetId) {
-      push({
-        kind: 'create',
-        executed: !dryRun,
-        source: { provider: source.name, id: task.id },
-        target: { provider: target.name },
-        title: task.title,
-        detail: `${target.name} from ${source.name}:${task.id} "${task.title}"`,
-      });
+      // Propagate deletes for tombstoned canonical tasks to all providers.
+      for (const canonicalId of tombstoneCanonicalIds) {
+        const map = state.mappings.find((m) => m.canonicalId === canonicalId);
+        if (!map) continue;
 
-      if (!dryRun) {
-        const created = await target.upsertTask({
-          id: '',
-          title: task.title,
-          notes: task.notes,
-          status: task.status,
-          dueAt: task.dueAt,
-          updatedAt: task.updatedAt,
-        });
-        this.store.upsertProviderId(state, map.canonicalId, target.name, created.id);
+        for (const p of healthyProviders) {
+          const pid = map.byProvider[p.name];
+          if (!pid) continue;
+          if (this.store.isTombstoned(state, p.name, pid)) {
+            push({
+              kind: 'delete',
+              executed: !dryRun,
+              source: { provider: 'tombstone', id: canonicalId },
+              target: { provider: p.name, id: pid },
+              title: map.canonical?.title,
+              detail: `delete-wins: canonical=${canonicalId}`,
+            });
+            if (!dryRun) {
+              try {
+                await p.deleteTask(pid);
+              } catch (e) {
+                errors.push({
+                  provider: p.name,
+                  stage: 'write',
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }
+          }
+        }
       }
-      return;
-    }
 
-    const targetTask = targetIndex.get(targetId);
-    if (!targetTask) {
-      // mapping points to missing task -> re-create, unless tombstoned
-      if (this.store.isTombstoned(state, target.name, targetId)) return;
-      push({
-        kind: 'recreate',
-        executed: !dryRun,
-        source: { provider: source.name, id: task.id },
-        target: { provider: target.name, id: targetId },
-        title: task.title,
-        detail: `${target.name}:${targetId} missing; recreate from ${source.name}:${task.id}`,
-      });
-      if (!dryRun) {
-        const created = await target.upsertTask({
-          id: '',
-          title: task.title,
-          notes: task.notes,
-          status: task.status,
-          dueAt: task.dueAt,
-          updatedAt: task.updatedAt,
+      // 5) Orphan detection: mappings that point to tasks missing in ALL providers.
+      for (const m of [...state.mappings]) {
+        const existsSomewhere = Object.entries(m.byProvider).some(([prov, pid]) => {
+          if (!pid) return false;
+          return snapshots.get(prov)?.index.has(pid) ?? false;
         });
-        this.store.upsertProviderId(state, map.canonicalId, target.name, created.id);
-      }
-      return;
-    }
 
-    // If both sides exist, we do simple LWW based on updatedAt.
-    if (newer(task.updatedAt, targetTask.updatedAt)) {
-      push({
-        kind: 'update',
-        executed: !dryRun,
-        source: { provider: source.name, id: task.id },
-        target: { provider: target.name, id: targetId },
-        title: task.title,
-        detail: `${target.name}:${targetId} <= ${source.name}:${task.id} (LWW)`,
-      });
-      if (!dryRun) {
-        await target.upsertTask({
-          id: targetId,
-          title: task.title,
-          notes: task.notes,
-          status: task.status,
-          dueAt: task.dueAt,
-          updatedAt: task.updatedAt,
-        });
+        if (!existsSomewhere && Object.keys(m.byProvider).length) {
+          // Tombstone the mapped ids (defensive), then remove mapping.
+          for (const [prov, pid] of Object.entries(m.byProvider)) {
+            if (!pid) continue;
+            this.store.addTombstone(state, prov as any, pid);
+          }
+          this.store.removeMapping(state, m.canonicalId);
+        }
       }
-    } else {
-      push({
-        kind: 'noop',
-        executed: false,
-        source: { provider: source.name, id: task.id },
-        target: { provider: target.name, id: targetId },
-        title: task.title,
-        detail: `no-op: ${source.name}:${task.id} not newer than ${target.name}:${targetId}`,
-      });
+
+      // 6) Main reconciliation: compute canonical per mapping and fan out (true N-way).
+      const { sources, targets } = pickProvidersByMode(mode, healthyProviders);
+      const targetSet = new Set(targets.map((t) => t.name));
+      const sourceSet = new Set(sources.map((t) => t.name));
+
+      // Ensure every task we can see is mapped (so brand-new tasks propagate).
+      for (const p of healthyProviders) {
+        const snap = snapshots.get(p.name)!;
+        for (const t of snap.all) {
+          mappingFor(p.name, t.id);
+        }
+      }
+
+      for (const m of state.mappings) {
+        // If any provider id is tombstoned, skip updates and let delete-wins handle it.
+        const tombstoned = Object.entries(m.byProvider).some(([prov, pid]) => pid && this.store.isTombstoned(state, prov as any, pid));
+        if (tombstoned) continue;
+
+        const baseline = m.canonical;
+
+        // Build per-provider task snapshots for this mapping.
+        const byProvTask = new Map<string, Task>();
+        for (const [prov, pid] of Object.entries(m.byProvider)) {
+          if (!pid) continue;
+          const t = snapshots.get(prov)?.index.get(pid);
+          if (t) byProvTask.set(prov, t);
+        }
+
+        // If mapping has only one provider task and we're in a restricted mode, still propagate.
+        if (byProvTask.size === 0) continue;
+
+        // Determine canonical as baseline with field-level merges.
+        const fields: Array<'title' | 'notes' | 'dueAt' | 'status'> = ['title', 'notes', 'dueAt', 'status'];
+
+        const canonical: Omit<Task, 'id'> = {
+          title: baseline?.title ?? [...byProvTask.values()][0]!.title,
+          notes: baseline?.notes,
+          dueAt: baseline?.dueAt,
+          status: baseline?.status ?? [...byProvTask.values()][0]!.status,
+          metadata: baseline?.metadata,
+          updatedAt: baseline?.updatedAt ?? [...byProvTask.values()][0]!.updatedAt,
+        };
+
+        const changedBy = new Map<string, Set<(typeof fields)[number]>>();
+
+        for (const [prov, t] of byProvTask.entries()) {
+          const set = new Set<(typeof fields)[number]>();
+          for (const f of fields) {
+            const baseVal = baseline ? (baseline as any)[f] : undefined;
+            const val = (t as any)[f];
+            if (baseVal !== val) set.add(f);
+          }
+          if (set.size) changedBy.set(prov, set);
+        }
+
+        // Field-level resolve
+        for (const f of fields) {
+          const contenders: Array<{ prov: string; t: Task }> = [];
+          for (const [prov, set] of changedBy.entries()) {
+            if (set.has(f)) contenders.push({ prov, t: byProvTask.get(prov)! });
+          }
+
+          if (contenders.length === 0) continue;
+          if (contenders.length === 1) {
+            (canonical as any)[f] = (contenders[0]!.t as any)[f];
+            canonical.updatedAt = contenders[0]!.t.updatedAt;
+            continue;
+          }
+
+          // Conflict: multiple providers changed the same field since baseline. Pick per-field LWW.
+          contenders.sort((a, b) => (newer(a.t.updatedAt, b.t.updatedAt) ? -1 : 1));
+          const winner = contenders[0]!;
+          (canonical as any)[f] = (winner.t as any)[f];
+
+          conflicts.push({
+            canonicalId: m.canonicalId,
+            field: f,
+            providers: contenders.map((c) => ({
+              provider: c.prov,
+              id: c.t.id,
+              updatedAt: c.t.updatedAt,
+              value: (c.t as any)[f],
+            })),
+            winner: { provider: winner.prov, id: winner.t.id, updatedAt: winner.t.updatedAt },
+            overwritten: contenders.slice(1).map((c) => ({ provider: c.prov, id: c.t.id })),
+          });
+        }
+
+        // Update canonical snapshot in state.
+        this.store.upsertCanonicalSnapshot(state, m.canonicalId, canonical);
+
+        // Fan out canonical to all targets.
+        for (const target of healthyProviders) {
+          const targetId = m.byProvider[target.name];
+          const canWrite = targetSet.has(target.name) && (mode !== 'mirror' || target.name !== providers[0]!.name);
+          const isSourceAllowed = sourceSet.has(target.name);
+          void isSourceAllowed; // kept for future refinement
+
+          if (!canWrite) continue;
+
+          const existing = targetId ? snapshots.get(target.name)!.index.get(targetId) : undefined;
+
+          if (!targetId) {
+            push({
+              kind: 'create',
+              executed: !dryRun,
+              source: { provider: 'canonical', id: m.canonicalId },
+              target: { provider: target.name },
+              title: canonical.title,
+              detail: `create from canonical ${m.canonicalId}`,
+            });
+            if (!dryRun) {
+              try {
+                const created = await target.upsertTask({
+                  id: '',
+                  title: canonical.title,
+                  notes: canonical.notes,
+                  dueAt: canonical.dueAt,
+                  status: canonical.status,
+                  metadata: canonical.metadata,
+                  updatedAt: canonical.updatedAt,
+                });
+                this.store.upsertProviderId(state, m.canonicalId, target.name, created.id);
+              } catch (e) {
+                errors.push({
+                  provider: target.name,
+                  stage: 'write',
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }
+            continue;
+          }
+
+          if (!existing) {
+            // Missing task: recreate unless tombstoned.
+            if (this.store.isTombstoned(state, target.name, targetId)) continue;
+            push({
+              kind: 'recreate',
+              executed: !dryRun,
+              source: { provider: 'canonical', id: m.canonicalId },
+              target: { provider: target.name, id: targetId },
+              title: canonical.title,
+              detail: `${target.name}:${targetId} missing; recreate`,
+            });
+            if (!dryRun) {
+              try {
+                const created = await target.upsertTask({
+                  id: '',
+                  title: canonical.title,
+                  notes: canonical.notes,
+                  dueAt: canonical.dueAt,
+                  status: canonical.status,
+                  metadata: canonical.metadata,
+                  updatedAt: canonical.updatedAt,
+                });
+                this.store.upsertProviderId(state, m.canonicalId, target.name, created.id);
+              } catch (e) {
+                errors.push({
+                  provider: target.name,
+                  stage: 'write',
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }
+            continue;
+          }
+
+          // Update only if any field differs.
+          const differs =
+            existing.title !== canonical.title ||
+            existing.notes !== canonical.notes ||
+            existing.dueAt !== canonical.dueAt ||
+            existing.status !== canonical.status;
+
+          if (!differs) {
+            push({
+              kind: 'noop',
+              executed: false,
+              source: { provider: 'canonical', id: m.canonicalId },
+              target: { provider: target.name, id: targetId },
+              title: canonical.title,
+              detail: 'already in sync',
+            });
+            continue;
+          }
+
+          push({
+            kind: 'update',
+            executed: !dryRun,
+            source: { provider: 'canonical', id: m.canonicalId },
+            target: { provider: target.name, id: targetId },
+            title: canonical.title,
+            detail: `field-level update (title/notes/status/dueAt)`,
+          });
+
+          if (!dryRun) {
+            try {
+              await target.upsertTask({
+                id: targetId,
+                title: canonical.title,
+                notes: canonical.notes,
+                dueAt: canonical.dueAt,
+                status: canonical.status,
+                metadata: canonical.metadata ?? existing.metadata,
+                updatedAt: canonical.updatedAt,
+              });
+            } catch (e) {
+              errors.push({
+                provider: target.name,
+                stage: 'write',
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }
+        }
+      }
+
+      const newLastSyncAt = new Date().toISOString();
+      state.lastSyncAt = newLastSyncAt;
+
+      // Persist conflicts log (even for dry-run, we keep it in-memory only)
+      if (conflicts.length && !dryRun) {
+        const lines = conflicts
+          .map((c) =>
+            JSON.stringify(
+              {
+                at: new Date().toISOString(),
+                ...c,
+              },
+              null,
+              0,
+            ),
+          )
+          .join('\n');
+        await appendFile(this.store.conflictsLogPath(), lines + '\n', 'utf8').catch(() => undefined);
+      }
+
+      if (!dryRun) await this.store.save(state);
+
+      return {
+        dryRun,
+        providers: healthyProviders.map((p) => p.name),
+        lastSyncAt,
+        newLastSyncAt,
+        counts,
+        actions,
+        conflicts,
+        errors,
+        durationMs: Date.now() - started,
+      };
+    } finally {
+      await lock.release();
     }
   }
 }

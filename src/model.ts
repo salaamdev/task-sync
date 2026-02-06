@@ -9,6 +9,11 @@ export interface Task {
   notes?: string;
   status: TaskStatus;
   dueAt?: string; // ISO
+  /**
+   * Provider-specific extra data that should round-trip without loss.
+   * Engine treats this as opaque.
+   */
+  metadata?: Record<string, unknown>;
   updatedAt: string; // ISO
 }
 

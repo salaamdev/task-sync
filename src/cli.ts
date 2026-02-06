@@ -111,7 +111,11 @@ program
       runCount++;
       logger.info(`sync start (dryRun=${dryRun}, run=${runCount})`, { providers });
 
-      const report = await engine.syncMany(providerInstances, { dryRun });
+      const report = await engine.syncMany(providerInstances, {
+      dryRun,
+      mode: env.TASK_SYNC_MODE ?? 'bidirectional',
+      tombstoneTtlDays: env.TASK_SYNC_TOMBSTONE_TTL_DAYS ?? 30,
+    });
 
       if ((opts.format ?? 'pretty') === 'json') {
         console.log(JSON.stringify(report, null, 2));
@@ -121,10 +125,20 @@ program
         console.log(`lastSyncAt: ${report.lastSyncAt ?? '(none)'}`);
         console.log(`newLastSyncAt: ${report.newLastSyncAt}`);
         console.log(`dryRun: ${report.dryRun}`);
+        console.log(`durationMs: ${report.durationMs}`);
 
         console.log('\ncounts:');
         for (const k of Object.keys(report.counts) as Array<keyof typeof report.counts>) {
           console.log(`- ${k}: ${report.counts[k]}`);
+        }
+
+        if (report.errors.length) {
+          console.log('\nerrors:');
+          for (const e of report.errors) console.log(`- ${e.provider} (${e.stage}): ${e.error}`);
+        }
+
+        if (report.conflicts.length) {
+          console.log(`\nconflicts: ${report.conflicts.length} (see conflicts.log in state dir)`);
         }
 
         console.log('\nactions:');
@@ -132,7 +146,7 @@ program
           const exec = a.executed ? 'exec' : 'plan';
           const tgt = a.target.id ? `${a.target.provider}:${a.target.id}` : a.target.provider;
           console.log(
-            `- [${exec}] ${a.kind} ${tgt} <= ${a.source.provider}:${a.source.id} ${a.title ? `"${a.title}"` : ''}`,
+            `- [${exec}] ${a.kind} ${tgt} <= ${a.source.provider}:${a.source.id} ${a.title ? `"${a.title}"` : ''} :: ${a.detail}`,
           );
         }
       }
