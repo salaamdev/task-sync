@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises';
-import type { Task } from '../model.js';
+import type { ProviderName, Task } from '../model.js';
 import type { TaskProvider } from '../providers/provider.js';
-import { JsonStore, type MappingRecord, type SyncState } from '../store/jsonStore.js';
+import { JsonStore, type MappingRecord } from '../store/jsonStore.js';
 import { acquireLock } from '../store/lock.js';
 
 export type ConflictPolicy = 'last-write-wins';
@@ -160,7 +160,7 @@ export class SyncEngine {
 
       // 3) Cold start: if no state, match tasks by title+notes across providers to avoid dupes.
       if (!state.lastSyncAt && state.mappings.length === 0) {
-        const buckets = new Map<string, Array<{ provider: string; task: Task }>>();
+        const buckets = new Map<string, Array<{ provider: ProviderName; task: Task }>>();
         for (const p of healthyProviders) {
           const snap = snapshots.get(p.name)!;
           for (const t of snap.all) {
@@ -175,9 +175,9 @@ export class SyncEngine {
           if (group.length < 2) continue;
           // create a single mapping across all matching tasks
           const first = group[0]!;
-          const rec = this.store.ensureMapping(state, first.provider as any, first.task.id);
+          const rec = this.store.ensureMapping(state, first.provider, first.task.id);
           for (const g of group.slice(1)) {
-            rec.byProvider[g.provider as any] = g.task.id;
+            rec.byProvider[g.provider] = g.task.id;
           }
           rec.canonical = {
             title: first.task.title,
@@ -191,8 +191,7 @@ export class SyncEngine {
       }
 
       // Helper: get mapping record for a provider task id.
-      const mappingFor = (provider: string, id: string): MappingRecord =>
-        this.store.ensureMapping(state, provider as any, id);
+      const mappingFor = (provider: ProviderName, id: string): MappingRecord => this.store.ensureMapping(state, provider, id);
 
       // 4) Zombie prevention (delete-wins): process deletions/completions first.
       const isTerminal = (t: Task) => t.status === 'deleted' || t.status === 'completed';
@@ -207,9 +206,9 @@ export class SyncEngine {
           tombstoneCanonicalIds.add(map.canonicalId);
 
           // Tombstone all known provider ids for this canonical task.
-          for (const [prov, pid] of Object.entries(map.byProvider)) {
+          for (const [prov, pid] of Object.entries(map.byProvider) as Array<[ProviderName, string]>) {
             if (!pid) continue;
-            this.store.addTombstone(state, prov as any, pid);
+            this.store.addTombstone(state, prov, pid);
           }
         }
       }
@@ -248,16 +247,16 @@ export class SyncEngine {
 
       // 5) Orphan detection: mappings that point to tasks missing in ALL providers.
       for (const m of [...state.mappings]) {
-        const existsSomewhere = Object.entries(m.byProvider).some(([prov, pid]) => {
+        const existsSomewhere = (Object.entries(m.byProvider) as Array<[ProviderName, string]>).some(([prov, pid]) => {
           if (!pid) return false;
           return snapshots.get(prov)?.index.has(pid) ?? false;
         });
 
         if (!existsSomewhere && Object.keys(m.byProvider).length) {
           // Tombstone the mapped ids (defensive), then remove mapping.
-          for (const [prov, pid] of Object.entries(m.byProvider)) {
+          for (const [prov, pid] of Object.entries(m.byProvider) as Array<[ProviderName, string]>) {
             if (!pid) continue;
-            this.store.addTombstone(state, prov as any, pid);
+            this.store.addTombstone(state, prov, pid);
           }
           this.store.removeMapping(state, m.canonicalId);
         }
@@ -278,41 +277,45 @@ export class SyncEngine {
 
       for (const m of state.mappings) {
         // If any provider id is tombstoned, skip updates and let delete-wins handle it.
-        const tombstoned = Object.entries(m.byProvider).some(([prov, pid]) => pid && this.store.isTombstoned(state, prov as any, pid));
+        const tombstoned = (Object.entries(m.byProvider) as Array<[ProviderName, string]>).some(
+          ([prov, pid]) => !!pid && this.store.isTombstoned(state, prov, pid),
+        );
         if (tombstoned) continue;
 
         const baseline = m.canonical;
 
         // Build per-provider task snapshots for this mapping.
-        const byProvTask = new Map<string, Task>();
-        for (const [prov, pid] of Object.entries(m.byProvider)) {
+        const byProvTask = new Map<ProviderName, Task>();
+        for (const [prov, pid] of Object.entries(m.byProvider) as Array<[ProviderName, string]>) {
           if (!pid) continue;
           const t = snapshots.get(prov)?.index.get(pid);
           if (t) byProvTask.set(prov, t);
         }
 
-        // If mapping has only one provider task and we're in a restricted mode, still propagate.
         if (byProvTask.size === 0) continue;
 
-        // Determine canonical as baseline with field-level merges.
-        const fields: Array<'title' | 'notes' | 'dueAt' | 'status'> = ['title', 'notes', 'dueAt', 'status'];
+        type CanonicalData = Omit<Task, 'id'>;
+        const fields = ['title', 'notes', 'dueAt', 'status'] as const;
+        type Field = (typeof fields)[number];
 
-        const canonical: Omit<Task, 'id'> = {
-          title: baseline?.title ?? [...byProvTask.values()][0]!.title,
+        const firstTask = [...byProvTask.values()][0]!;
+
+        const canonical: CanonicalData = {
+          title: baseline?.title ?? firstTask.title,
           notes: baseline?.notes,
           dueAt: baseline?.dueAt,
-          status: baseline?.status ?? [...byProvTask.values()][0]!.status,
+          status: baseline?.status ?? firstTask.status,
           metadata: baseline?.metadata,
-          updatedAt: baseline?.updatedAt ?? [...byProvTask.values()][0]!.updatedAt,
+          updatedAt: baseline?.updatedAt ?? firstTask.updatedAt,
         };
 
-        const changedBy = new Map<string, Set<(typeof fields)[number]>>();
+        const changedBy = new Map<ProviderName, Set<Field>>();
 
         for (const [prov, t] of byProvTask.entries()) {
-          const set = new Set<(typeof fields)[number]>();
+          const set = new Set<Field>();
           for (const f of fields) {
-            const baseVal = baseline ? (baseline as any)[f] : undefined;
-            const val = (t as any)[f];
+            const baseVal = baseline ? baseline[f] : undefined;
+            const val = t[f];
             if (baseVal !== val) set.add(f);
           }
           if (set.size) changedBy.set(prov, set);
@@ -320,14 +323,31 @@ export class SyncEngine {
 
         // Field-level resolve
         for (const f of fields) {
-          const contenders: Array<{ prov: string; t: Task }> = [];
+          const contenders: Array<{ prov: ProviderName; t: Task }> = [];
           for (const [prov, set] of changedBy.entries()) {
             if (set.has(f)) contenders.push({ prov, t: byProvTask.get(prov)! });
           }
 
+          const assign = (field: Field, val: Task[Field]) => {
+            switch (field) {
+              case 'title':
+                canonical.title = val as Task['title'];
+                break;
+              case 'notes':
+                canonical.notes = val as Task['notes'];
+                break;
+              case 'dueAt':
+                canonical.dueAt = val as Task['dueAt'];
+                break;
+              case 'status':
+                canonical.status = val as Task['status'];
+                break;
+            }
+          };
+
           if (contenders.length === 0) continue;
           if (contenders.length === 1) {
-            (canonical as any)[f] = (contenders[0]!.t as any)[f];
+            assign(f, contenders[0]!.t[f]);
             canonical.updatedAt = contenders[0]!.t.updatedAt;
             continue;
           }
@@ -335,7 +355,7 @@ export class SyncEngine {
           // Conflict: multiple providers changed the same field since baseline. Pick per-field LWW.
           contenders.sort((a, b) => (newer(a.t.updatedAt, b.t.updatedAt) ? -1 : 1));
           const winner = contenders[0]!;
-          (canonical as any)[f] = (winner.t as any)[f];
+          assign(f, winner.t[f]);
 
           conflicts.push({
             canonicalId: m.canonicalId,
@@ -344,7 +364,7 @@ export class SyncEngine {
               provider: c.prov,
               id: c.t.id,
               updatedAt: c.t.updatedAt,
-              value: (c.t as any)[f],
+              value: c.t[f],
             })),
             winner: { provider: winner.prov, id: winner.t.id, updatedAt: winner.t.updatedAt },
             overwritten: contenders.slice(1).map((c) => ({ provider: c.prov, id: c.t.id })),

@@ -34,9 +34,12 @@ describe('SyncEngine hardening', () => {
     // baseline canonical
     store.upsertCanonicalSnapshot(s, map.canonicalId, {
       title: 'A',
+      notes: undefined,
+      dueAt: undefined,
       status: 'active',
+      metadata: undefined,
       updatedAt: t0,
-    } as any);
+    });
     await store.save(s);
 
     // Simulate B attempting an update (but A completed should win)
@@ -113,9 +116,11 @@ describe('SyncEngine hardening', () => {
     store.upsertCanonicalSnapshot(s, map.canonicalId, {
       title: 'Title',
       notes: 'n0',
+      dueAt: undefined,
       status: 'active',
+      metadata: undefined,
       updatedAt: baseAt,
-    } as any);
+    });
     await store.save(s);
 
     await engine.syncMany([a, b], { dryRun: false });
@@ -143,7 +148,7 @@ describe('SyncEngine hardening', () => {
       listTasks: async () => {
         throw new Error('Habitica down');
       },
-      upsertTask: async (_: any): Promise<Task> => {
+      upsertTask: async (_input: unknown): Promise<Task> => {
         throw new Error('Habitica down');
       },
       deleteTask: async () => {

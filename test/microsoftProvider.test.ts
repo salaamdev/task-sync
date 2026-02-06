@@ -10,7 +10,7 @@ function jsonResponse(obj: unknown, status = 200) {
 
 describe('MicrosoftTodoProvider', () => {
   it('lists tasks from first list and maps fields', async () => {
-    const fetcher: typeof fetch = async (url, init) => {
+    const fetcher: typeof fetch = async (url, _init) => {
       const u = String(url);
 
       if (u.includes('/oauth2/v2.0/token')) {

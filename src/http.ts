@@ -82,7 +82,6 @@ export async function requestJson<T>(
   const backoffMs = opts.backoffMs ?? 200;
 
   let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     attempt++;
     try {
