@@ -3,45 +3,46 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Task Sync — Keep Google Tasks & Microsoft To Do in Sync</title>
-  <meta name="description" content="Self-hosted, bidirectional sync between Google Tasks and Microsoft To Do. Field-level conflict resolution, zero data leaks, and only 2 runtime dependencies." />
-  <meta name="theme-color" content="#0a0a0f" />
-
-  <!-- Open Graph -->
+  <title>Task Sync — Bridge Your Task Worlds</title>
+  <meta name="description" content="Self-hosted bidirectional sync between Google Tasks and Microsoft To Do. Field-level conflict resolution. Your data stays yours." />
+  <meta name="theme-color" content="#05060a" />
   <meta property="og:title" content="Task Sync" />
   <meta property="og:description" content="Self-hosted bidirectional sync between Google Tasks and Microsoft To Do." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://salaamdev.github.io/task-sync/" />
-
-  <!-- Favicon (inline SVG) -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⇄</text></svg>" />
 
   <style>
-    /* ============================================================
-       RESET & BASE
-       ============================================================ */
+    /* ═══════════════════════════════════════════════════════════
+       RESET & TOKENS
+       ═══════════════════════════════════════════════════════════ */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:        #0a0a0f;
-      --bg-card:   #12121a;
-      --bg-code:   #1a1a26;
-      --border:    #1e1e2e;
-      --text:      #e4e4ef;
-      --text-dim:  #8888a0;
-      --accent:    #6366f1;
-      --accent-2:  #818cf8;
-      --green:     #22c55e;
-      --blue:      #3b82f6;
-      --orange:    #f97316;
-      --radius:    12px;
-      --max-w:     1100px;
+      --bg:       #05060a;
+      --bg-sub:   #0a0c14;
+      --bg-card:  #0e1019;
+      --bg-code:  #0c0e17;
+      --border:   #161a28;
+      --border-l: #1f2438;
+      --text:     #dcdce8;
+      --text-dim: #6e6e88;
+      --text-mid: #9898b0;
+      --mint:     #00e5a0;
+      --mint-dim: rgba(0,229,160,.08);
+      --amber:    #fbbf24;
+      --amber-dim:rgba(251,191,36,.10);
+      --blue:     #60a5fa;
+      --blue-dim: rgba(96,165,250,.10);
+      --coral:    #f472b6;
+      --max-w:    1080px;
+      --r:        10px;
     }
 
     html { scroll-behavior: smooth; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: var(--bg);
       color: var(--text);
       line-height: 1.7;
@@ -49,651 +50,935 @@
       overflow-x: hidden;
     }
 
-    a { color: var(--accent-2); text-decoration: none; transition: color .2s; }
-    a:hover { color: #a5b4fc; }
+    ::selection { background: rgba(0,229,160,.2); color: #fff; }
 
-    code {
-      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
-      background: var(--bg-code);
-      padding: 2px 7px;
-      border-radius: 5px;
-      font-size: .88em;
+    a { color: var(--mint); text-decoration: none; transition: color .2s; }
+    a:hover { color: #4dffc4; }
+
+    /* ═══════════════════════════════════════════════════════════
+       UTILITIES
+       ═══════════════════════════════════════════════════════════ */
+    .wrap { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+    .fade-up {
+      opacity: 0; transform: translateY(28px);
+      transition: opacity .7s cubic-bezier(.22,1,.36,1), transform .7s cubic-bezier(.22,1,.36,1);
     }
+    .fade-up.vis { opacity: 1; transform: none; }
 
-    /* ============================================================
+    /* ═══════════════════════════════════════════════════════════
        NAV
-       ============================================================ */
+       ═══════════════════════════════════════════════════════════ */
     nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      backdrop-filter: blur(16px) saturate(120%);
-      -webkit-backdrop-filter: blur(16px) saturate(120%);
-      background: rgba(10, 10, 15, .75);
+      backdrop-filter: blur(20px) saturate(120%);
+      -webkit-backdrop-filter: blur(20px) saturate(120%);
+      background: rgba(5,6,10,.7);
       border-bottom: 1px solid var(--border);
     }
     .nav-inner {
-      max-width: var(--max-w);
-      margin: 0 auto;
-      padding: 0 24px;
-      height: 64px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      max-width: var(--max-w); margin: 0 auto; padding: 0 24px;
+      height: 56px; display: flex; align-items: center; justify-content: space-between;
     }
     .nav-brand {
-      display: flex; align-items: center; gap: 10px;
-      font-weight: 700; font-size: 1.15rem; color: var(--text);
+      display: flex; align-items: center; gap: 8px;
+      font-weight: 700; font-size: 1rem; color: var(--text); letter-spacing: -.01em;
     }
-    .nav-brand svg { width: 28px; height: 28px; }
-    .nav-links { display: flex; gap: 28px; align-items: center; }
-    .nav-links a { color: var(--text-dim); font-size: .9rem; font-weight: 500; }
-    .nav-links a:hover { color: var(--text); }
-    .nav-cta {
-      background: var(--accent); color: #fff !important; padding: 8px 18px;
-      border-radius: 8px; font-weight: 600; font-size: .88rem;
-      transition: background .2s;
+    .nav-brand .mark {
+      width: 26px; height: 26px; border-radius: 7px;
+      background: linear-gradient(135deg, var(--amber), var(--mint), var(--blue));
+      display: flex; align-items: center; justify-content: center;
     }
-    .nav-cta:hover { background: #4f46e5; }
+    .nav-brand .mark svg { width: 14px; height: 14px; }
+    .nav-r { display: flex; gap: 24px; align-items: center; }
+    .nav-r a { color: var(--text-dim); font-size: .85rem; font-weight: 500; }
+    .nav-r a:hover { color: var(--text); }
+    .nav-gh {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      padding: 6px 14px; border-radius: 8px;
+      font-size: .82rem; font-weight: 600; color: var(--text) !important;
+      transition: border-color .2s;
+    }
+    .nav-gh:hover { border-color: var(--mint); }
+    .nav-gh svg { width: 15px; height: 15px; fill: currentColor; }
 
-    @media (max-width: 640px) {
-      .nav-links a:not(.nav-cta) { display: none; }
+    @media (max-width: 600px) {
+      .nav-r a:not(.nav-gh) { display: none; }
     }
 
-    /* ============================================================
-       HERO
-       ============================================================ */
+    /* ═══════════════════════════════════════════════════════════
+       HERO — The Bridge
+       ═══════════════════════════════════════════════════════════ */
     .hero {
-      position: relative;
-      padding: 160px 24px 100px;
-      text-align: center;
-      overflow: hidden;
+      position: relative; min-height: 100vh; min-height: 100svh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 120px 24px 80px; text-align: center; overflow: hidden;
     }
+
+    /* Canvas background */
+    #sync-canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 0;
+    }
+
+    /* Subtle grid overlay */
     .hero::before {
       content: '';
-      position: absolute; top: -120px; left: 50%; transform: translateX(-50%);
-      width: 800px; height: 800px;
-      background: radial-gradient(circle, rgba(99,102,241,.12) 0%, transparent 70%);
+      position: absolute; inset: 0; z-index: 1;
+      background-image:
+        linear-gradient(rgba(0,229,160,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,160,.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 60% 50% at 50% 40%, black 20%, transparent 70%);
+      -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 40%, black 20%, transparent 70%);
       pointer-events: none;
     }
+
+    .hero-content { position: relative; z-index: 2; }
+
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 14px 5px 6px; border-radius: 20px;
+      background: var(--mint-dim); border: 1px solid rgba(0,229,160,.15);
+      font-size: .78rem; font-weight: 600; color: var(--mint);
+      margin-bottom: 28px; letter-spacing: .02em;
+    }
+    .hero-eyebrow .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--mint);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .5; transform: scale(.8); }
+    }
+
     .hero h1 {
-      font-size: clamp(2.4rem, 6vw, 4rem);
-      font-weight: 800;
-      letter-spacing: -.03em;
-      line-height: 1.15;
-      margin-bottom: 24px;
+      font-size: clamp(2.2rem, 5.5vw, 3.6rem);
+      font-weight: 800; letter-spacing: -.04em; line-height: 1.1;
+      margin-bottom: 20px;
     }
-    .hero h1 .gradient {
-      background: linear-gradient(135deg, var(--accent-2), #a78bfa, #c084fc);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+
+    .hero-sub {
+      max-width: 520px; margin: 0 auto 36px;
+      font-size: 1.05rem; color: var(--text-mid); line-height: 1.65;
     }
-    .hero p {
-      max-width: 620px; margin: 0 auto 40px;
-      font-size: 1.15rem; color: var(--text-dim); line-height: 1.65;
+
+    /* Provider orbit badges */
+    .hero-providers {
+      display: flex; gap: 24px; justify-content: center; align-items: center;
+      margin-bottom: 40px;
     }
-    .hero-actions { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+    .prov-badge {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 10px;
+      font-size: .85rem; font-weight: 600;
+    }
+    .prov-badge.google { background: var(--amber-dim); border: 1px solid rgba(251,191,36,.18); color: var(--amber); }
+    .prov-badge.ms { background: var(--blue-dim); border: 1px solid rgba(96,165,250,.18); color: var(--blue); }
+    .prov-badge svg { width: 18px; height: 18px; }
+    .sync-arrow {
+      color: var(--mint); font-size: 1.2rem; font-weight: 700;
+      animation: arrow-pulse 2s ease-in-out infinite;
+    }
+    @keyframes arrow-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .3; }
+    }
+
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
     .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 14px 28px; border-radius: 10px;
-      font-weight: 600; font-size: .95rem;
-      transition: all .2s;
-      border: none; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 12px 24px; border-radius: 9px;
+      font-weight: 600; font-size: .9rem; border: none; cursor: pointer;
+      transition: all .25s cubic-bezier(.22,1,.36,1);
+      text-decoration: none;
     }
-    .btn-primary { background: var(--accent); color: #fff; }
-    .btn-primary:hover { background: #4f46e5; transform: translateY(-1px); }
-    .btn-outline {
-      background: transparent; color: var(--text);
-      border: 1px solid var(--border);
+    .btn svg { width: 16px; height: 16px; }
+    .btn-mint {
+      background: var(--mint); color: #05060a;
     }
-    .btn-outline:hover { border-color: var(--accent); color: var(--accent-2); }
-    .btn svg { width: 18px; height: 18px; }
+    .btn-mint:hover { background: #4dffc4; transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,229,160,.2); color: #05060a; }
+    .btn-ghost {
+      background: transparent; border: 1px solid var(--border-l); color: var(--text);
+    }
+    .btn-ghost:hover { border-color: var(--mint); color: var(--mint); }
 
-    /* Badges below hero */
-    .hero-badges {
-      display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
-      margin-top: 48px;
+    /* Stats strip */
+    .hero-stats {
+      display: flex; gap: 40px; justify-content: center; margin-top: 60px;
+      padding-top: 32px; border-top: 1px solid var(--border);
     }
-    .badge {
+    .hero-stat { text-align: center; }
+    .hero-stat .num {
+      font-size: 1.5rem; font-weight: 800; letter-spacing: -.03em;
+      font-variant-numeric: tabular-nums;
+    }
+    .hero-stat .num.mint { color: var(--mint); }
+    .hero-stat .num.amber { color: var(--amber); }
+    .hero-stat .num.blue { color: var(--blue); }
+    .hero-stat .lbl { font-size: .75rem; color: var(--text-dim); margin-top: 2px; font-weight: 500; }
+
+    @media (max-width: 500px) {
+      .hero-providers { flex-direction: column; gap: 12px; }
+      .sync-arrow { transform: rotate(90deg); }
+      .hero-stats { gap: 24px; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       SECTION SYSTEM
+       ═══════════════════════════════════════════════════════════ */
+    section { padding: 100px 0; }
+
+    .sec-label {
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 6px 14px; border-radius: 20px;
-      background: var(--bg-card); border: 1px solid var(--border);
-      font-size: .82rem; color: var(--text-dim); font-weight: 500;
+      font-size: .72rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--mint); margin-bottom: 14px;
     }
-    .badge-dot {
-      width: 7px; height: 7px; border-radius: 50%;
+    .sec-label::before {
+      content: ''; width: 16px; height: 2px; background: var(--mint); border-radius: 1px;
     }
-
-    /* ============================================================
-       SECTIONS
-       ============================================================ */
-    section { padding: 100px 24px; }
-    .section-inner { max-width: var(--max-w); margin: 0 auto; }
-    .section-label {
-      display: inline-block;
-      font-size: .78rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-      color: var(--accent-2);
-      margin-bottom: 12px;
+    .sec-title {
+      font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+      font-weight: 750; letter-spacing: -.03em; line-height: 1.15;
+      margin-bottom: 14px;
     }
-    .section-title {
-      font-size: clamp(1.7rem, 4vw, 2.4rem);
-      font-weight: 700; letter-spacing: -.02em;
-      margin-bottom: 16px;
-    }
-    .section-desc {
-      font-size: 1.05rem; color: var(--text-dim);
-      max-width: 640px; margin-bottom: 48px;
-    }
-    section:nth-child(even) { background: var(--bg-card); }
-
-    /* ============================================================
-       FEATURES GRID
-       ============================================================ */
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
-    }
-    .feature-card {
-      padding: 28px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      transition: border-color .25s, transform .25s;
-    }
-    .feature-card:hover {
-      border-color: var(--accent);
-      transform: translateY(-3px);
-    }
-    .feature-icon {
-      width: 44px; height: 44px;
-      display: flex; align-items: center; justify-content: center;
-      border-radius: 10px;
-      margin-bottom: 18px;
-      font-size: 1.4rem;
-    }
-    .feature-card h3 {
-      font-size: 1.08rem; font-weight: 650;
-      margin-bottom: 8px;
-    }
-    .feature-card p {
-      font-size: .92rem; color: var(--text-dim); line-height: 1.6;
+    .sec-desc {
+      font-size: .98rem; color: var(--text-dim); max-width: 560px; line-height: 1.7;
+      margin-bottom: 48px;
     }
 
-    /* ============================================================
-       HOW IT WORKS
-       ============================================================ */
-    .steps {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 32px;
-      counter-reset: step;
-    }
-    .step {
-      position: relative;
-      padding: 32px 24px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      counter-increment: step;
-    }
-    .step::before {
-      content: counter(step);
-      position: absolute; top: -14px; left: 20px;
-      width: 32px; height: 32px;
-      display: flex; align-items: center; justify-content: center;
-      background: var(--accent); color: #fff;
-      border-radius: 8px; font-weight: 700; font-size: .85rem;
-    }
-    .step h3 {
-      font-size: 1.02rem; font-weight: 650; margin-bottom: 8px;
-      margin-top: 4px;
-    }
-    .step p { font-size: .9rem; color: var(--text-dim); line-height: 1.6; }
-
-    /* ============================================================
-       ARCHITECTURE
-       ============================================================ */
-    .arch-container {
-      background: var(--bg-code);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 40px;
-      overflow-x: auto;
-    }
-    .arch-container pre {
-      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
-      font-size: .82rem;
-      line-height: 1.65;
-      color: var(--text-dim);
-      white-space: pre;
-      margin: 0;
-    }
-    .arch-container .hl { color: var(--accent-2); }
-    .arch-container .hl2 { color: var(--green); }
-    .arch-container .hl3 { color: var(--orange); }
-
-    /* ============================================================
-       QUICKSTART / CODE BLOCK
-       ============================================================ */
-    .code-block {
-      background: var(--bg-code);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-    .code-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 20px;
+    /* ═══════════════════════════════════════════════════════════
+       PROBLEM STATEMENT
+       ═══════════════════════════════════════════════════════════ */
+    .problem {
+      border-top: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
-      font-size: .82rem; color: var(--text-dim); font-weight: 600;
+      background:
+        linear-gradient(135deg, rgba(251,191,36,.03), transparent 40%),
+        linear-gradient(225deg, rgba(96,165,250,.03), transparent 40%),
+        var(--bg-sub);
     }
-    .code-body {
-      padding: 20px;
-      overflow-x: auto;
+    .problem .wrap {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center;
     }
-    .code-body pre {
-      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
-      font-size: .85rem; line-height: 1.7;
-      color: var(--text); margin: 0;
-    }
-    .code-body .comment { color: var(--text-dim); }
-    .code-body .cmd { color: var(--green); }
-
-    .quickstart-tabs {
-      display: flex; gap: 0; margin-bottom: 24px;
-    }
-    .tab-btn {
-      padding: 10px 24px;
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text-dim);
-      font-size: .88rem; font-weight: 600;
-      cursor: pointer;
-      transition: all .2s;
-    }
-    .tab-btn:first-child { border-radius: 8px 0 0 8px; }
-    .tab-btn:last-child { border-radius: 0 8px 8px 0; }
-    .tab-btn.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-
-    /* ============================================================
-       TECH STACK
-       ============================================================ */
-    .tech-row {
-      display: flex; flex-wrap: wrap; gap: 12px;
-      margin-top: 24px;
-    }
-    .tech-pill {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 10px 18px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      font-size: .88rem; font-weight: 500;
+    .problem-left blockquote {
+      font-size: clamp(1.3rem, 3vw, 1.8rem);
+      font-weight: 700; letter-spacing: -.02em; line-height: 1.35;
+      border-left: 3px solid var(--mint);
+      padding-left: 20px;
       color: var(--text);
     }
-    .tech-pill span { font-size: 1.1rem; }
+    .problem-left blockquote em {
+      font-style: normal; color: var(--text-dim);
+    }
+    .problem-right {
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .pain-point {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 16px; border-radius: var(--r);
+      background: rgba(255,255,255,.02);
+      border: 1px solid var(--border);
+    }
+    .pain-point .icon {
+      flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .95rem;
+    }
+    .pain-point h4 { font-size: .9rem; font-weight: 650; margin-bottom: 2px; }
+    .pain-point p { font-size: .82rem; color: var(--text-dim); line-height: 1.55; }
 
-    /* ============================================================
-       FOOTER
-       ============================================================ */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 48px 24px;
-      text-align: center;
-    }
-    footer p {
-      color: var(--text-dim);
-      font-size: .88rem;
-    }
-    footer a { color: var(--accent-2); }
-    .footer-links {
-      display: flex; gap: 24px; justify-content: center;
-      margin-bottom: 16px;
-    }
-    .footer-links a {
-      color: var(--text-dim);
-      font-size: .88rem; font-weight: 500;
-    }
-    .footer-links a:hover { color: var(--text); }
-
-    /* ============================================================
-       ANIMATIONS
-       ============================================================ */
-    .fade-in {
-      opacity: 0;
-      transform: translateY(24px);
-      transition: opacity .6s ease-out, transform .6s ease-out;
-    }
-    .fade-in.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    /* ============================================================
-       RESPONSIVE
-       ============================================================ */
     @media (max-width: 768px) {
-      section { padding: 72px 20px; }
-      .hero { padding: 140px 20px 72px; }
-      .arch-container { padding: 20px; }
-      .features-grid { grid-template-columns: 1fr; }
+      .problem .wrap { grid-template-columns: 1fr; gap: 40px; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       FEATURES — Asymmetric bento grid
+       ═══════════════════════════════════════════════════════════ */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-auto-rows: auto;
+      gap: 12px;
+    }
+    .bento-card {
+      padding: 28px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      transition: border-color .3s;
+      position: relative; overflow: hidden;
+    }
+    .bento-card:hover { border-color: var(--border-l); }
+    .bento-card.span-2 { grid-column: span 2; }
+
+    .bento-card .icon-wrap {
+      width: 40px; height: 40px; border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px; font-size: 1.1rem;
+    }
+    .bento-card h3 { font-size: .95rem; font-weight: 650; margin-bottom: 6px; letter-spacing: -.01em; }
+    .bento-card p { font-size: .84rem; color: var(--text-dim); line-height: 1.6; }
+
+    /* Accent corner glow */
+    .bento-card.glow-mint::before {
+      content: '';
+      position: absolute; top: -40px; right: -40px;
+      width: 120px; height: 120px;
+      background: radial-gradient(circle, rgba(0,229,160,.06), transparent 70%);
+      pointer-events: none;
+    }
+    .bento-card.glow-amber::before {
+      content: '';
+      position: absolute; top: -40px; right: -40px;
+      width: 120px; height: 120px;
+      background: radial-gradient(circle, rgba(251,191,36,.06), transparent 70%);
+      pointer-events: none;
+    }
+
+    @media (max-width: 768px) {
+      .bento { grid-template-columns: 1fr; }
+      .bento-card.span-2 { grid-column: span 1; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       HOW IT WORKS — Pipeline
+       ═══════════════════════════════════════════════════════════ */
+    .pipeline-section { background: var(--bg-sub); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .pipeline {
+      display: flex; gap: 0; position: relative; overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .pipeline::before {
+      content: '';
+      position: absolute; top: 50px; left: 40px; right: 40px; height: 2px;
+      background: linear-gradient(90deg, var(--amber), var(--mint), var(--blue));
+      opacity: .25; z-index: 0;
+    }
+    .pipe-step {
+      flex: 1; min-width: 150px; text-align: center;
+      position: relative; z-index: 1;
+    }
+    .pipe-num {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: .82rem; font-weight: 800;
+      background: var(--bg-card); border: 2px solid var(--border-l);
+      color: var(--mint); margin-bottom: 14px;
+      transition: border-color .3s, background .3s;
+    }
+    .pipe-step:hover .pipe-num {
+      border-color: var(--mint); background: var(--mint-dim);
+    }
+    .pipe-step h4 { font-size: .85rem; font-weight: 650; margin-bottom: 4px; }
+    .pipe-step p { font-size: .78rem; color: var(--text-dim); line-height: 1.5; max-width: 140px; margin: 0 auto; }
+
+    @media (max-width: 768px) {
+      .pipeline { flex-wrap: wrap; gap: 20px; }
+      .pipeline::before { display: none; }
+      .pipe-step { flex: 0 0 45%; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       ARCHITECTURE — SVG diagram
+       ═══════════════════════════════════════════════════════════ */
+    .arch-wrap {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 40px;
+      overflow: hidden;
+      position: relative;
+    }
+    .arch-wrap svg { width: 100%; height: auto; display: block; }
+
+    /* ═══════════════════════════════════════════════════════════
+       TERMINAL DEMO
+       ═══════════════════════════════════════════════════════════ */
+    .terminal-section {
+      background:
+        linear-gradient(180deg, var(--bg-sub), var(--bg));
+    }
+    .term-split {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .term-box {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .term-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,.01);
+    }
+    .term-dots { display: flex; gap: 5px; }
+    .term-dots span { width: 10px; height: 10px; border-radius: 50%; }
+    .term-dots span:nth-child(1) { background: #ff5f57; }
+    .term-dots span:nth-child(2) { background: #febc2e; }
+    .term-dots span:nth-child(3) { background: #28c840; }
+    .term-title { font-size: .72rem; color: var(--text-dim); font-weight: 600; margin-left: 8px; }
+    .term-body {
+      padding: 20px;
+      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+      font-size: .78rem;
+      line-height: 1.8;
+      color: var(--text-dim);
+      min-height: 260px;
+    }
+    .term-body .prompt { color: var(--mint); }
+    .term-body .cmd { color: var(--text); }
+    .term-body .comment { color: #4a4a60; }
+    .term-body .success { color: #22c55e; }
+    .term-body .info { color: var(--blue); }
+    .term-body .warn { color: var(--amber); }
+    .term-cursor {
+      display: inline-block; width: 8px; height: 15px;
+      background: var(--mint); vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    @media (max-width: 768px) {
+      .term-split { grid-template-columns: 1fr; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       SYNC MODES — Cards with animated borders
+       ═══════════════════════════════════════════════════════════ */
+    .modes-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    }
+    .mode-card {
+      padding: 28px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      text-align: center;
+      transition: all .3s;
+    }
+    .mode-card:hover { border-color: var(--border-l); transform: translateY(-2px); }
+    .mode-card .mode-icon {
+      font-size: 2rem; margin-bottom: 14px;
+      display: block;
+    }
+    .mode-card h3 { font-size: .95rem; font-weight: 650; margin-bottom: 6px; }
+    .mode-card p { font-size: .82rem; color: var(--text-dim); line-height: 1.55; }
+    .mode-card .mode-tag {
+      display: inline-block; margin-top: 12px;
+      padding: 3px 10px; border-radius: 5px;
+      font-size: .7rem; font-weight: 700; letter-spacing: .04em;
+    }
+    .mode-card .tag-default { background: var(--mint-dim); color: var(--mint); }
+    .mode-card .tag-blue { background: var(--blue-dim); color: var(--blue); }
+    .mode-card .tag-amber { background: var(--amber-dim); color: var(--amber); }
+
+    @media (max-width: 768px) {
+      .modes-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       TECH STACK — Horizontal pills
+       ═══════════════════════════════════════════════════════════ */
+    .stack-section { border-top: 1px solid var(--border); background: var(--bg-sub); }
+    .stack-row {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .stack-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      font-size: .82rem; font-weight: 600; color: var(--text-mid);
+      transition: border-color .2s;
+    }
+    .stack-pill:hover { border-color: var(--border-l); }
+    .stack-pill .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       CTA
+       ═══════════════════════════════════════════════════════════ */
+    .cta-section {
+      text-align: center;
+      background:
+        radial-gradient(ellipse 50% 60% at 50% 100%, rgba(0,229,160,.05), transparent),
+        var(--bg);
+      border-top: 1px solid var(--border);
+    }
+    .cta-section .sec-title { max-width: 480px; margin-left: auto; margin-right: auto; }
+    .cta-section .sec-desc { margin-left: auto; margin-right: auto; }
+
+    /* ═══════════════════════════════════════════════════════════
+       FOOTER
+       ═══════════════════════════════════════════════════════════ */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+    footer p { font-size: .78rem; color: var(--text-dim); }
+    footer a { color: var(--text-mid); }
+    footer a:hover { color: var(--mint); }
+    .footer-links {
+      display: flex; gap: 24px; justify-content: center; margin-bottom: 12px;
+    }
+    .footer-links a { font-size: .82rem; font-weight: 500; }
+
+    /* ═══════════════════════════════════════════════════════════
+       SCREENSHOT
+       ═══════════════════════════════════════════════════════════ */
+    .screenshot-wrap {
+      margin-top: 48px;
+      border-radius: var(--r);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      position: relative;
+    }
+    .screenshot-wrap::after {
+      content: '';
+      position: absolute; bottom: 0; left: 0; right: 0; height: 80px;
+      background: linear-gradient(transparent, var(--bg-sub));
+      pointer-events: none;
+    }
+    .screenshot-wrap img {
+      width: 100%; display: block;
+      opacity: .85; transition: opacity .3s;
+    }
+    .screenshot-wrap:hover img { opacity: 1; }
+    .screenshot-label {
+      position: absolute; top: 12px; right: 12px;
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(5,6,10,.7); backdrop-filter: blur(8px);
+      font-size: .7rem; font-weight: 600; color: var(--text-dim);
+      border: 1px solid var(--border);
+      z-index: 1;
     }
   </style>
 </head>
+
 <body>
 
-  <!-- ======================= NAV ======================= -->
+  <!-- ═══════════════ NAV ═══════════════ -->
   <nav>
     <div class="nav-inner">
       <a href="#" class="nav-brand">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="9 11 12 14 22 4"></polyline>
-          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-        </svg>
-        Task Sync
+        <span class="mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#05060a" stroke-width="2.5" stroke-linecap="round">
+            <path d="M7 16l-4-4 4-4M17 8l4 4-4 4"/>
+          </svg>
+        </span>
+        task-sync
       </a>
-      <div class="nav-links">
+      <div class="nav-r">
         <a href="#features">Features</a>
-        <a href="#how-it-works">How It Works</a>
-        <a href="#get-started">Get Started</a>
-        <a href="https://github.com/salaamdev/task-sync" class="nav-cta" target="_blank" rel="noopener">
+        <a href="#how">How It Works</a>
+        <a href="#start">Get Started</a>
+        <a href="https://github.com/salaamdev/task-sync" target="_blank" rel="noopener" class="nav-gh">
+          <svg viewBox="0 0 24 24"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
           GitHub
         </a>
       </div>
     </div>
   </nav>
 
-  <!-- ======================= HERO ======================= -->
+  <!-- ═══════════════ HERO ═══════════════ -->
   <section class="hero">
-    <h1 class="fade-in">
-      Keep your tasks<br /><span class="gradient">perfectly in sync</span>
-    </h1>
-    <p class="fade-in">
-      Bidirectional sync between <strong>Google Tasks</strong> and <strong>Microsoft To Do</strong>.
-      Self-hosted, field-level conflict resolution, zero data leaks.
-    </p>
-    <div class="hero-actions fade-in">
-      <a href="https://github.com/salaamdev/task-sync" class="btn btn-primary" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
-        View on GitHub
-      </a>
-      <a href="#get-started" class="btn btn-outline">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-        Get Started
-      </a>
-    </div>
-    <div class="hero-badges fade-in">
-      <span class="badge"><span class="badge-dot" style="background:var(--green)"></span> MIT License</span>
-      <span class="badge"><span class="badge-dot" style="background:var(--blue)"></span> TypeScript</span>
-      <span class="badge"><span class="badge-dot" style="background:var(--orange)"></span> 2 Runtime Deps</span>
-      <span class="badge"><span class="badge-dot" style="background:var(--accent)"></span> Node.js &ge; 22</span>
+    <canvas id="sync-canvas"></canvas>
+    <div class="hero-content">
+      <div class="hero-eyebrow fade-up">
+        <span class="dot"></span>
+        Self-hosted &middot; Open source &middot; MIT
+      </div>
+
+      <h1 class="fade-up">
+        Your tasks, finally<br/>in one place.
+      </h1>
+
+      <p class="hero-sub fade-up">
+        Task Sync bridges Google Tasks and Microsoft To Do with field-level conflict resolution.
+        Runs on your machine. Your data never leaves.
+      </p>
+
+      <div class="hero-providers fade-up">
+        <span class="prov-badge google">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.97 10.97 0 001 12c0 1.77.42 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+          Google Tasks
+        </span>
+        <span class="sync-arrow">⇄</span>
+        <span class="prov-badge ms">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="1" y="1" width="10" height="10" fill="#F25022"/><rect x="13" y="1" width="10" height="10" fill="#7FBA00"/><rect x="1" y="13" width="10" height="10" fill="#00A4EF"/><rect x="13" y="13" width="10" height="10" fill="#FFB900"/></svg>
+          Microsoft To Do
+        </span>
+      </div>
+
+      <div class="hero-actions fade-up">
+        <a href="https://github.com/salaamdev/task-sync" class="btn btn-mint" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 00-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 004 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+          View on GitHub
+        </a>
+        <a href="#start" class="btn btn-ghost">
+          Get started
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+
+      <div class="hero-stats fade-up">
+        <div class="hero-stat">
+          <div class="num mint">2</div>
+          <div class="lbl">Runtime deps</div>
+        </div>
+        <div class="hero-stat">
+          <div class="num amber">11</div>
+          <div class="lbl">Sync fields</div>
+        </div>
+        <div class="hero-stat">
+          <div class="num blue">3</div>
+          <div class="lbl">Sync modes</div>
+        </div>
+        <div class="hero-stat">
+          <div class="num" style="color:var(--coral);">0</div>
+          <div class="lbl">Data leaks</div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- ======================= FEATURES ======================= -->
+  <!-- ═══════════════ PROBLEM ═══════════════ -->
+  <section class="problem">
+    <div class="wrap">
+      <div class="problem-left fade-up">
+        <blockquote>
+          Google Tasks on the phone.<br/>
+          Microsoft To Do at work.<br/>
+          <em>Same tasks. Two silos. Zero sync.</em>
+        </blockquote>
+      </div>
+      <div class="problem-right">
+        <div class="pain-point fade-up">
+          <div class="icon" style="background:var(--amber-dim); color:var(--amber);">&#x26A0;</div>
+          <div>
+            <h4>Tasks fall through the cracks</h4>
+            <p>You add a task on your phone and forget to add it at work. Or vice versa. Things get missed.</p>
+          </div>
+        </div>
+        <div class="pain-point fade-up">
+          <div class="icon" style="background:var(--blue-dim); color:var(--blue);">&#x1F512;</div>
+          <div>
+            <h4>Third-party services want your data</h4>
+            <p>Cloud sync tools route your tasks through their servers. Your data becomes their product.</p>
+          </div>
+        </div>
+        <div class="pain-point fade-up">
+          <div class="icon" style="background:rgba(244,114,182,.1); color:var(--coral);">&#x1F4A5;</div>
+          <div>
+            <h4>Whole-task sync causes data loss</h4>
+            <p>Simple sync tools overwrite entire tasks on conflict. Change the title here, lose the due date there.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ FEATURES ═══════════════ -->
   <section id="features">
-    <div class="section-inner">
-      <span class="section-label fade-in">Features</span>
-      <h2 class="section-title fade-in">Everything you need, nothing you don't</h2>
-      <p class="section-desc fade-in">
-        Task Sync does one thing well — keeps your task lists in sync across providers
-        without compromising your privacy.
+    <div class="wrap">
+      <div class="sec-label fade-up">Features</div>
+      <h2 class="sec-title fade-up">Built for people who care about their data</h2>
+      <p class="sec-desc fade-up">
+        Every feature exists because something annoyed us about existing tools.
       </p>
-      <div class="features-grid">
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(99,102,241,.12); color:var(--accent-2);">&#x21C4;</div>
-          <h3>Bidirectional Sync</h3>
-          <p>Changes in either provider flow to the other automatically. No manual import/export.</p>
+
+      <div class="bento">
+        <div class="bento-card span-2 glow-mint fade-up">
+          <div class="icon-wrap" style="background:var(--mint-dim); color:var(--mint);">&#x2694;</div>
+          <h3>Field-level conflict resolution</h3>
+          <p>Change the title in Google Tasks. Change the due date in Microsoft To Do. Both changes survive.
+             Unlike task-level sync, every field is compared individually — last-write-wins per field, not per task. Conflicts logged for transparency.</p>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(34,197,94,.12); color:var(--green);">&#x2696;</div>
-          <h3>Field-Level Conflict Resolution</h3>
-          <p>Last-write-wins <em>per field</em>, not per task. Edit a title in Google and a due date in Microsoft — both changes are preserved.</p>
+        <div class="bento-card glow-amber fade-up">
+          <div class="icon-wrap" style="background:var(--amber-dim); color:var(--amber);">&#x1F50D;</div>
+          <h3>Cold-start matching</h3>
+          <p>First sync won't duplicate everything. Tasks are matched across providers by title + notes before creating anything new.</p>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(249,115,22,.12); color:var(--orange);">&#x1F50D;</div>
-          <h3>Cold-Start Matching</h3>
-          <p>First-time sync intelligently deduplicates existing tasks by title and notes. No floods of duplicates.</p>
+        <div class="bento-card fade-up">
+          <div class="icon-wrap" style="background:var(--blue-dim); color:var(--blue);">&#x1F6E1;</div>
+          <h3>Self-hosted</h3>
+          <p>Runs on your machine. Your OAuth tokens, your state files, your data. No cloud middleman. No telemetry.</p>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(59,130,246,.12); color:var(--blue);">&#x1F6E1;</div>
-          <h3>Self-Hosted &amp; Private</h3>
-          <p>Your data never leaves your machine. No third-party cloud, no telemetry, no tracking. Full control.</p>
+        <div class="bento-card fade-up">
+          <div class="icon-wrap" style="background:rgba(244,114,182,.1); color:var(--coral);">&#x1F5D1;</div>
+          <h3>Delete propagation</h3>
+          <p>Tombstones ensure deleted tasks stay deleted across providers. 30-day TTL prevents ghost resurrections.</p>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(168,85,247,.12); color:#a855f7;">&#x1F5D1;</div>
-          <h3>Delete Propagation</h3>
-          <p>Tombstone-based delete tracking ensures deleted tasks stay deleted across providers — no resurrection bugs.</p>
+        <div class="bento-card span-2 fade-up">
+          <div class="icon-wrap" style="background:rgba(255,255,255,.04); color:var(--text-mid);">&#x1F3AE;</div>
+          <h3>Two interfaces, one engine</h3>
+          <p>Use the Web UI for one-click OAuth and visual sync controls with auto-sync timers.
+             Or use the CLI for cron jobs, scripts, and headless environments with JSON output. Same sync engine underneath.</p>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(236,72,153,.12); color:#ec4899;">&#x26A1;</div>
-          <h3>Minimal Dependencies</h3>
-          <p>Only 2 runtime deps — <code>commander</code> and <code>zod</code>. Tiny attack surface, fast installs, no bloat.</p>
+        <div class="bento-card fade-up">
+          <div class="icon-wrap" style="background:var(--mint-dim); color:var(--mint);">&#x26A1;</div>
+          <h3>Lean runtime</h3>
+          <p>Only <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:.8rem;">commander</code> and <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:.8rem;">zod</code> at runtime. Tiny attack surface.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ======================= HOW IT WORKS ======================= -->
-  <section id="how-it-works">
-    <div class="section-inner">
-      <span class="section-label fade-in">How It Works</span>
-      <h2 class="section-title fade-in">Sync algorithm, simplified</h2>
-      <p class="section-desc fade-in">
-        Each sync run follows a deterministic pipeline that guarantees consistency.
+  <!-- ═══════════════ HOW IT WORKS ═══════════════ -->
+  <section id="how" class="pipeline-section">
+    <div class="wrap">
+      <div class="sec-label fade-up">How It Works</div>
+      <h2 class="sec-title fade-up">The sync pipeline</h2>
+      <p class="sec-desc fade-up">
+        Every sync run is an 11-step pipeline that ensures nothing gets lost.
       </p>
-      <div class="steps fade-in">
-        <div class="step">
-          <h3>Fetch &amp; Lock</h3>
-          <p>Acquire a file lock, load state, then fetch tasks from both Google Tasks and Microsoft To Do APIs.</p>
-        </div>
-        <div class="step">
-          <h3>Match &amp; Diff</h3>
-          <p>Cold-start match on first run. For known tasks, diff every field against the last canonical snapshot.</p>
-        </div>
-        <div class="step">
-          <h3>Resolve Conflicts</h3>
-          <p>If both providers changed the same field, last-write-wins by timestamp. All conflicts are logged for auditing.</p>
-        </div>
-        <div class="step">
-          <h3>Push &amp; Save</h3>
-          <p>Fan out the resolved canonical state to all providers. Persist updated mappings, tombstones, and watermarks.</p>
-        </div>
+
+      <div class="pipeline fade-up">
+        <div class="pipe-step"><div class="pipe-num">1</div><h4>Lock</h4><p>Acquire file lock</p></div>
+        <div class="pipe-step"><div class="pipe-num">2</div><h4>Load</h4><p>Read state &amp; mappings</p></div>
+        <div class="pipe-step"><div class="pipe-num">3</div><h4>Prune</h4><p>Expire old tombstones</p></div>
+        <div class="pipe-step"><div class="pipe-num">4</div><h4>Fetch</h4><p>Pull tasks from APIs</p></div>
+        <div class="pipe-step"><div class="pipe-num">5</div><h4>Match</h4><p>Cold-start deduplicate</p></div>
+        <div class="pipe-step"><div class="pipe-num">6</div><h4>Diff</h4><p>Field-by-field compare</p></div>
+        <div class="pipe-step"><div class="pipe-num">7</div><h4>Resolve</h4><p>Last-write-wins</p></div>
+        <div class="pipe-step"><div class="pipe-num">8</div><h4>Push</h4><p>Fan out to providers</p></div>
+        <div class="pipe-step"><div class="pipe-num">9</div><h4>Save</h4><p>Persist new state</p></div>
+      </div>
+
+      <!-- Architecture diagram -->
+      <div class="arch-wrap fade-up" style="margin-top:48px;">
+        <svg viewBox="0 0 800 380" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Background grid pattern -->
+          <defs>
+            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,.03)" stroke-width="0.5"/>
+            </pattern>
+            <!-- Animated dash for data flow -->
+            <linearGradient id="flow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#fbbf24"/>
+              <stop offset="50%" stop-color="#00e5a0"/>
+              <stop offset="100%" stop-color="#60a5fa"/>
+            </linearGradient>
+          </defs>
+          <rect width="800" height="380" fill="url(#grid)"/>
+
+          <!-- CLI Box -->
+          <rect x="30" y="40" width="120" height="50" rx="8" fill="#0e1019" stroke="#1f2438"/>
+          <text x="90" y="70" text-anchor="middle" fill="#fbbf24" font-family="monospace" font-size="12" font-weight="700">CLI</text>
+
+          <!-- Web UI Box -->
+          <rect x="30" y="120" width="120" height="50" rx="8" fill="#0e1019" stroke="#1f2438"/>
+          <text x="90" y="150" text-anchor="middle" fill="#60a5fa" font-family="monospace" font-size="12" font-weight="700">Web UI</text>
+
+          <!-- Arrows to engine -->
+          <path d="M150 65 L250 165" stroke="#1f2438" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <path d="M150 145 L250 165" stroke="#1f2438" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+          <!-- Sync Engine Box (central) -->
+          <rect x="250" y="110" width="300" height="160" rx="10" fill="#0e1019" stroke="url(#flow-grad)" stroke-width="1.5"/>
+          <text x="400" y="145" text-anchor="middle" fill="#00e5a0" font-family="monospace" font-size="14" font-weight="800">Sync Engine</text>
+          <text x="400" y="170" text-anchor="middle" fill="#6e6e88" font-family="monospace" font-size="10">engine.ts</text>
+
+          <!-- Engine features -->
+          <rect x="275" y="190" width="110" height="26" rx="5" fill="rgba(0,229,160,.06)" stroke="rgba(0,229,160,.15)"/>
+          <text x="330" y="207" text-anchor="middle" fill="#00e5a0" font-family="monospace" font-size="9">Cold-start match</text>
+
+          <rect x="395" y="190" width="130" height="26" rx="5" fill="rgba(0,229,160,.06)" stroke="rgba(0,229,160,.15)"/>
+          <text x="460" y="207" text-anchor="middle" fill="#00e5a0" font-family="monospace" font-size="9">Conflict resolution</text>
+
+          <rect x="275" y="228" width="130" height="26" rx="5" fill="rgba(0,229,160,.06)" stroke="rgba(0,229,160,.15)"/>
+          <text x="340" y="245" text-anchor="middle" fill="#00e5a0" font-family="monospace" font-size="9">Delete propagation</text>
+
+          <rect x="415" y="228" width="110" height="26" rx="5" fill="rgba(0,229,160,.06)" stroke="rgba(0,229,160,.15)"/>
+          <text x="470" y="245" text-anchor="middle" fill="#00e5a0" font-family="monospace" font-size="9">State versioning</text>
+
+          <!-- Arrows to providers -->
+          <path d="M550 165 L620 90" stroke="#1f2438" stroke-width="1.5" stroke-dasharray="4 4">
+            <animate attributeName="stroke" values="#1f2438;#fbbf24;#1f2438" dur="3s" repeatCount="indefinite"/>
+          </path>
+          <path d="M550 215 L620 290" stroke="#1f2438" stroke-width="1.5" stroke-dasharray="4 4">
+            <animate attributeName="stroke" values="#1f2438;#60a5fa;#1f2438" dur="3s" repeatCount="indefinite" begin="1.5s"/>
+          </path>
+
+          <!-- Google Tasks Box -->
+          <rect x="620" y="55" width="150" height="70" rx="8" fill="#0e1019" stroke="rgba(251,191,36,.3)"/>
+          <text x="695" y="85" text-anchor="middle" fill="#fbbf24" font-family="monospace" font-size="12" font-weight="700">Google Tasks</text>
+          <text x="695" y="105" text-anchor="middle" fill="#6e6e88" font-family="monospace" font-size="9">Tasks API v1</text>
+
+          <!-- Microsoft To Do Box -->
+          <rect x="620" y="255" width="150" height="70" rx="8" fill="#0e1019" stroke="rgba(96,165,250,.3)"/>
+          <text x="695" y="285" text-anchor="middle" fill="#60a5fa" font-family="monospace" font-size="12" font-weight="700">Microsoft To Do</text>
+          <text x="695" y="305" text-anchor="middle" fill="#6e6e88" font-family="monospace" font-size="9">Graph API</text>
+
+          <!-- State Store -->
+          <rect x="315" y="310" width="170" height="50" rx="8" fill="#0e1019" stroke="#1f2438"/>
+          <text x="400" y="335" text-anchor="middle" fill="#9898b0" font-family="monospace" font-size="11" font-weight="600">JSON State Store</text>
+          <text x="400" y="350" text-anchor="middle" fill="#6e6e88" font-family="monospace" font-size="9">.task-sync/state.json</text>
+
+          <!-- Arrow engine to state -->
+          <path d="M400 270 L400 310" stroke="#1f2438" stroke-width="1.5" stroke-dasharray="4 4"/>
+        </svg>
       </div>
     </div>
   </section>
 
-  <!-- ======================= ARCHITECTURE ======================= -->
+  <!-- ═══════════════ TERMINAL DEMO ═══════════════ -->
+  <section id="start" class="terminal-section">
+    <div class="wrap">
+      <div class="sec-label fade-up">Get Started</div>
+      <h2 class="sec-title fade-up">Running in under a minute</h2>
+      <p class="sec-desc fade-up">
+        Choose your interface. Same sync engine underneath.
+      </p>
+
+      <div class="term-split">
+        <!-- Web UI terminal -->
+        <div class="term-box fade-up">
+          <div class="term-header">
+            <div class="term-dots"><span></span><span></span><span></span></div>
+            <span class="term-title">Web UI</span>
+          </div>
+          <div class="term-body" id="term-web">
+            <div><span class="comment"># Clone & install</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">git clone https://github.com/salaamdev/task-sync.git</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">cd task-sync && npm install</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">npm run web:install</span></div>
+            <div>&nbsp;</div>
+            <div><span class="comment"># Configure OAuth credentials</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">cp .env.local.example .env.local</span></div>
+            <div><span class="comment"># Edit .env.local with your keys</span></div>
+            <div>&nbsp;</div>
+            <div><span class="comment"># Launch</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">npm run web:dev</span></div>
+            <div><span class="success">▸ Ready on http://localhost:3000</span></div>
+            <div>&nbsp;</div>
+            <div><span class="info">Connect providers → Sync Now → Done.</span></div>
+          </div>
+        </div>
+
+        <!-- CLI terminal -->
+        <div class="term-box fade-up">
+          <div class="term-header">
+            <div class="term-dots"><span></span><span></span><span></span></div>
+            <span class="term-title">CLI</span>
+          </div>
+          <div class="term-body" id="term-cli">
+            <div><span class="comment"># Build</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">git clone https://github.com/salaamdev/task-sync.git</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">cd task-sync && npm install && npm run build</span></div>
+            <div>&nbsp;</div>
+            <div><span class="comment"># Get OAuth tokens</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">npm run oauth:google</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">npm run oauth:microsoft</span></div>
+            <div>&nbsp;</div>
+            <div><span class="comment"># Sync</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">node dist/cli.js doctor</span></div>
+            <div><span class="success">✓ Config valid  ✓ Google  ✓ Microsoft</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">node dist/cli.js sync</span></div>
+            <div><span class="success">✓ Synced 23 tasks</span> <span class="comment">(2 created, 1 updated)</span></div>
+            <div>&nbsp;</div>
+            <div><span class="comment"># Auto-sync every 5 min</span></div>
+            <div><span class="prompt">$ </span><span class="cmd">node dist/cli.js sync --poll 5</span></div>
+            <div><span class="info">⏳ Next sync in 5:00</span><span class="term-cursor"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Screenshot -->
+      <div class="screenshot-wrap fade-up">
+        <span class="screenshot-label">Web UI Dashboard</span>
+        <img src="https://raw.githubusercontent.com/salaamdev/task-sync/main/docs/screenshot.png"
+             alt="Task Sync Web UI showing connected Google Tasks and Microsoft To Do with sync report"
+             loading="lazy" />
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ SYNC MODES ═══════════════ -->
   <section>
-    <div class="section-inner">
-      <span class="section-label fade-in">Architecture</span>
-      <h2 class="section-title fade-in">Clean, extensible, provider-agnostic</h2>
-      <p class="section-desc fade-in">
-        The sync engine doesn't know about Google or Microsoft. Providers implement a simple
-        <code>TaskProvider</code> interface — adding new ones is straightforward.
+    <div class="wrap">
+      <div class="sec-label fade-up">Sync Modes</div>
+      <h2 class="sec-title fade-up">Your data, your rules</h2>
+      <p class="sec-desc fade-up">
+        Three modes for different workflows. Set once in your config.
       </p>
-      <div class="arch-container fade-in">
-<pre>
-┌─────────────────────────────────────────────────────────────┐
-│                        <span class="hl">Task Sync</span>                           │
-│                                                             │
-│   ┌──────────┐    ┌──────────────┐    ┌──────────────────┐  │
-│   │   <span class="hl3">CLI</span>    │    │   <span class="hl3">Web UI</span>     │    │  <span class="hl">Sync Engine</span>     │  │
-│   │ cli.ts   │───▶│  Next.js 15  │───▶│  engine.ts       │  │
-│   └──────────┘    └──────────────┘    │                  │  │
-│                                       │  Cold-start      │  │
-│                                       │  Conflict resolve│  │
-│                                       │  Delete propagate│  │
-│                                       └────────┬─────────┘  │
-│                                                │             │
-│                     ┌─────────────────────────┼───────┐     │
-│                     │                         │       │     │
-│               ┌─────▼─────┐          ┌───────▼─────┐ │     │
-│               │  <span class="hl2">Google</span>    │          │ <span class="hl2">Microsoft</span>  │ │     │
-│               │  Tasks API │          │ Graph API   │ │     │
-│               └───────────┘          └─────────────┘ │     │
-│                     │                         │       │     │
-│                     └─────────────────────────┘       │     │
-│                          <span class="hl3">Providers</span>                  │     │
-│                                                       │     │
-│               ┌──────────────────────┐                │     │
-│               │   <span class="hl">JSON State Store</span>   │────────────────┘     │
-│               │  (.task-sync/state)  │                      │
-│               └──────────────────────┘                      │
-└─────────────────────────────────────────────────────────────┘
-</pre>
-      </div>
-    </div>
-  </section>
 
-  <!-- ======================= SYNC MODES ======================= -->
-  <section id="modes">
-    <div class="section-inner">
-      <span class="section-label fade-in">Sync Modes</span>
-      <h2 class="section-title fade-in">Choose how your data flows</h2>
-      <p class="section-desc fade-in">
-        Three modes to match your workflow. Set once, forget about it.
-      </p>
-      <div class="features-grid">
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(99,102,241,.12); color:var(--accent-2);">&#x21C4;</div>
+      <div class="modes-grid">
+        <div class="mode-card fade-up">
+          <span class="mode-icon">⇄</span>
           <h3>Bidirectional</h3>
-          <p>Changes flow both ways. The default and most common mode — full two-way sync.</p>
+          <p>Changes flow both ways. Edit anywhere, sync everywhere.</p>
+          <span class="mode-tag tag-default">default</span>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(59,130,246,.12); color:var(--blue);">&#x2192;</div>
+        <div class="mode-card fade-up">
+          <span class="mode-icon">→</span>
           <h3>A → B Only</h3>
-          <p>One-way push from Provider A to Provider B. Changes in B are not synced back.</p>
+          <p>One-way push. Provider A is the source, B receives updates.</p>
+          <span class="mode-tag tag-blue">one-way</span>
         </div>
-        <div class="feature-card fade-in">
-          <div class="feature-icon" style="background:rgba(168,85,247,.12); color:#a855f7;">&#x1F4CB;</div>
+        <div class="mode-card fade-up">
+          <span class="mode-icon">⊜</span>
           <h3>Mirror</h3>
-          <p>Provider A is the source of truth. Provider B mirrors it exactly — additions, edits, and deletes.</p>
+          <p>Provider A is truth. B becomes an exact replica. Additions, edits, deletes — all mirrored.</p>
+          <span class="mode-tag tag-amber">strict</span>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ======================= GET STARTED ======================= -->
-  <section id="get-started">
-    <div class="section-inner">
-      <span class="section-label fade-in">Get Started</span>
-      <h2 class="section-title fade-in">Up and running in minutes</h2>
-      <p class="section-desc fade-in">
-        Choose the Web UI for a visual experience, or the CLI for headless environments and automation.
-      </p>
-
-      <div class="quickstart-tabs fade-in">
-        <button class="tab-btn active" onclick="switchTab('web')">Web UI</button>
-        <button class="tab-btn" onclick="switchTab('cli')">CLI</button>
-      </div>
-
-      <div id="tab-web" class="tab-content active fade-in">
-        <div class="code-block">
-          <div class="code-header">
-            <span>Terminal</span>
-            <span>bash</span>
-          </div>
-          <div class="code-body">
-<pre><span class="comment"># Clone and install</span>
-<span class="cmd">git clone https://github.com/salaamdev/task-sync.git</span>
-<span class="cmd">cd task-sync</span>
-<span class="cmd">npm install</span>
-<span class="cmd">npm run web:install</span>
-
-<span class="comment"># Configure your OAuth credentials</span>
-<span class="cmd">cp .env.local.example .env.local</span>
-<span class="comment"># Edit .env.local with your Google & Microsoft OAuth keys</span>
-
-<span class="comment"># Start the web UI</span>
-<span class="cmd">npm run web:dev</span>
-
-<span class="comment"># Open http://localhost:3000 → Connect → Sync</span></pre>
-          </div>
-        </div>
-      </div>
-
-      <div id="tab-cli" class="tab-content fade-in">
-        <div class="code-block">
-          <div class="code-header">
-            <span>Terminal</span>
-            <span>bash</span>
-          </div>
-          <div class="code-body">
-<pre><span class="comment"># Clone and build</span>
-<span class="cmd">git clone https://github.com/salaamdev/task-sync.git</span>
-<span class="cmd">cd task-sync</span>
-<span class="cmd">npm install && npm run build</span>
-
-<span class="comment"># Get your OAuth tokens</span>
-<span class="cmd">npm run oauth:google</span>
-<span class="cmd">npm run oauth:microsoft</span>
-
-<span class="comment"># Configure</span>
-<span class="cmd">cp .env.local.example .env.local</span>
-<span class="comment"># Add your credentials and refresh tokens</span>
-
-<span class="comment"># Validate and sync</span>
-<span class="cmd">node dist/cli.js doctor</span>
-<span class="cmd">node dist/cli.js sync --dry-run</span>
-<span class="cmd">node dist/cli.js sync</span>
-
-<span class="comment"># Auto-sync every 5 minutes</span>
-<span class="cmd">node dist/cli.js sync --poll 5</span></pre>
-          </div>
-        </div>
+  <!-- ═══════════════ TECH STACK ═══════════════ -->
+  <section class="stack-section">
+    <div class="wrap">
+      <div class="sec-label fade-up">Built With</div>
+      <h2 class="sec-title fade-up">Lean stack, zero bloat</h2>
+      <p class="sec-desc fade-up">Chosen for reliability, not resume padding.</p>
+      <div class="stack-row fade-up">
+        <div class="stack-pill"><span class="dot" style="background:#3178c6;"></span> TypeScript 5.9</div>
+        <div class="stack-pill"><span class="dot" style="background:#68a063;"></span> Node.js 22+</div>
+        <div class="stack-pill"><span class="dot" style="background:#000;border:1px solid #333;"></span> Next.js 15</div>
+        <div class="stack-pill"><span class="dot" style="background:#61dafb;"></span> React 19</div>
+        <div class="stack-pill"><span class="dot" style="background:#38bdf8;"></span> Tailwind CSS 4</div>
+        <div class="stack-pill"><span class="dot" style="background:#fff;border:1px solid #333;"></span> shadcn/ui</div>
+        <div class="stack-pill"><span class="dot" style="background:#729b1b;"></span> Vitest</div>
+        <div class="stack-pill"><span class="dot" style="background:#f4a940;"></span> tsup</div>
+        <div class="stack-pill"><span class="dot" style="background:#3068b7;"></span> Zod</div>
+        <div class="stack-pill"><span class="dot" style="background:#f44;"></span> Commander.js</div>
       </div>
     </div>
   </section>
 
-  <!-- ======================= TECH STACK ======================= -->
-  <section>
-    <div class="section-inner">
-      <span class="section-label fade-in">Built With</span>
-      <h2 class="section-title fade-in">Modern, lean tech stack</h2>
-      <div class="tech-row fade-in">
-        <div class="tech-pill"><span>🟦</span> TypeScript 5.9</div>
-        <div class="tech-pill"><span>🟩</span> Node.js 22+</div>
-        <div class="tech-pill"><span>⚡</span> Next.js 15</div>
-        <div class="tech-pill"><span>⚛️</span> React 19</div>
-        <div class="tech-pill"><span>🎨</span> Tailwind CSS 4</div>
-        <div class="tech-pill"><span>🧩</span> shadcn/ui</div>
-        <div class="tech-pill"><span>🧪</span> Vitest</div>
-        <div class="tech-pill"><span>📦</span> tsup</div>
-        <div class="tech-pill"><span>🔒</span> Zod</div>
-        <div class="tech-pill"><span>🖥️</span> Commander.js</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ======================= CTA ======================= -->
-  <section style="background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg) 100%);">
-    <div class="section-inner" style="text-align: center;">
-      <h2 class="section-title fade-in" style="max-width: 560px; margin: 0 auto 16px;">
-        Stop switching between task apps
+  <!-- ═══════════════ CTA ═══════════════ -->
+  <section class="cta-section">
+    <div class="wrap" style="text-align:center;">
+      <div class="sec-label fade-up" style="justify-content:center;">Stop the Juggle</div>
+      <h2 class="sec-title fade-up">
+        One command. Both task lists. Always in sync.
       </h2>
-      <p class="section-desc fade-in" style="margin: 0 auto 36px;">
-        Task Sync runs on your machine, syncs your tasks, and stays out of your way. Open source, forever free.
+      <p class="sec-desc fade-up" style="margin-left:auto;margin-right:auto;">
+        Open source, self-hosted, and built to get out of your way.
+        Star the repo if it's useful.
       </p>
-      <div class="hero-actions fade-in">
-        <a href="https://github.com/salaamdev/task-sync" class="btn btn-primary" target="_blank" rel="noopener">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
+      <div class="hero-actions fade-up" style="justify-content:center;">
+        <a href="https://github.com/salaamdev/task-sync" class="btn btn-mint" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
           Star on GitHub
         </a>
-        <a href="https://github.com/salaamdev/task-sync/blob/main/README.md" class="btn btn-outline" target="_blank" rel="noopener">
-          Read the Docs
+        <a href="https://github.com/salaamdev/task-sync/blob/main/README.md" class="btn btn-ghost" target="_blank" rel="noopener">
+          Read the docs
         </a>
       </div>
     </div>
   </section>
 
-  <!-- ======================= FOOTER ======================= -->
+  <!-- ═══════════════ FOOTER ═══════════════ -->
   <footer>
     <div class="footer-links">
       <a href="https://github.com/salaamdev/task-sync" target="_blank" rel="noopener">GitHub</a>
@@ -701,31 +986,93 @@
       <a href="https://github.com/salaamdev/task-sync/issues" target="_blank" rel="noopener">Issues</a>
       <a href="https://github.com/salaamdev/task-sync/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
     </div>
-    <p>
-      MIT License &copy; 2025 <a href="https://github.com/salaamdev" target="_blank" rel="noopener">Abdisalam (Salaamdev)</a>
-    </p>
+    <p>MIT &copy; 2025 <a href="https://github.com/salaamdev" target="_blank" rel="noopener">salaamdev</a></p>
   </footer>
 
-  <!-- ======================= SCRIPTS ======================= -->
+  <!-- ═══════════════ SCRIPTS ═══════════════ -->
   <script>
-    // Tab switching
-    function switchTab(tab) {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      document.getElementById('tab-' + tab).classList.add('active');
-      event.target.classList.add('active');
-    }
+    /* ── Scroll-triggered fade-up ── */
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('vis'); });
+    }, { threshold: 0.08, rootMargin: '0px 0px -30px 0px' });
+    document.querySelectorAll('.fade-up').forEach(el => obs.observe(el));
 
-    // Scroll-triggered fade-in
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('visible');
+    /* ── Canvas: Animated sync particles ── */
+    (function() {
+      const canvas = document.getElementById('sync-canvas');
+      const ctx = canvas.getContext('2d');
+      let W, H, particles = [], connections = [];
+      const PARTICLE_COUNT = 60;
+      const COLORS = ['#00e5a0', '#fbbf24', '#60a5fa', '#f472b6'];
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        W = canvas.clientWidth;
+        H = canvas.clientHeight;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        ctx.scale(dpr, dpr);
+      }
+
+      function init() {
+        resize();
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          particles.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: (Math.random() - 0.5) * 0.4,
+            vy: (Math.random() - 0.5) * 0.4,
+            r: Math.random() * 1.5 + 0.5,
+            color: COLORS[Math.floor(Math.random() * COLORS.length)],
+            alpha: Math.random() * 0.5 + 0.2
+          });
         }
-      });
-    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+      }
 
-    document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // Connections
+        for (let i = 0; i < particles.length; i++) {
+          for (let j = i + 1; j < particles.length; j++) {
+            const dx = particles[i].x - particles[j].x;
+            const dy = particles[i].y - particles[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 120) {
+              const alpha = (1 - dist / 120) * 0.08;
+              ctx.beginPath();
+              ctx.moveTo(particles[i].x, particles[i].y);
+              ctx.lineTo(particles[j].x, particles[j].y);
+              ctx.strokeStyle = `rgba(0, 229, 160, ${alpha})`;
+              ctx.lineWidth = 0.5;
+              ctx.stroke();
+            }
+          }
+        }
+
+        // Particles
+        for (const p of particles) {
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.x < 0 || p.x > W) p.vx *= -1;
+          if (p.y < 0 || p.y > H) p.vy *= -1;
+
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = p.alpha;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+
+        requestAnimationFrame(draw);
+      }
+
+      window.addEventListener('resize', () => { resize(); });
+      init();
+      draw();
+    })();
   </script>
 
 </body>
