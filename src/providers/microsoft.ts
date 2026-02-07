@@ -1,49 +1,237 @@
 import type { Task } from '../model.js';
 import type { TaskProvider } from './provider.js';
+import { requestJson, type FetchLike } from '../http.js';
 
 export interface MicrosoftTodoProviderOptions {
   /** Azure AD app client id */
   clientId: string;
   /** Tenant id (or 'common') */
   tenantId: string;
-  /** OAuth refresh token (or other credential, TBD) */
+  /** OAuth refresh token */
   refreshToken: string;
-  /** Task list id (defaults TBD) */
+  /** Task list id (defaults to first list) */
   listId?: string;
+  /** Inject fetch for tests */
+  fetcher?: FetchLike;
+}
+
+interface MsTokenResponse {
+  token_type: string;
+  scope: string;
+  expires_in: number;
+  ext_expires_in: number;
+  access_token: string;
+  /** Microsoft may rotate refresh tokens. If present, you must use the new one going forward. */
+  refresh_token?: string;
+}
+
+interface GraphTodoList {
+  id: string;
+  displayName: string;
+}
+
+interface GraphListListsResponse {
+  value: GraphTodoList[];
+}
+
+interface GraphBody {
+  content: string;
+  contentType: 'text' | 'html';
+}
+
+interface GraphTask {
+  id: string;
+  title: string;
+  body?: GraphBody;
+  dueDateTime?: { dateTime: string; timeZone: string };
+  completedDateTime?: { dateTime: string; timeZone: string };
+  /** Graph To Do supports a status field. Completed date is derived server-side. */
+  status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred' | string;
+  lastModifiedDateTime: string;
+  createdDateTime: string;
+}
+
+interface GraphListTasksResponse {
+  value: GraphTask[];
+  '@odata.nextLink'?: string;
 }
 
 /**
- * Scaffold for a real Microsoft To Do provider via Microsoft Graph.
- *
- * MVP NOTE: Not implemented yet.
- *
- * TODO(next):
- * - Implement OAuth2 refresh flow (MSAL or raw token endpoint)
- * - Call Graph endpoints for To Do tasks
- * - Map fields into canonical Task
+ * Normalize fractional seconds in an ISO timestamp to 3 digits (milliseconds).
+ * e.g. "2026-02-08T00:00:00.0000000Z" → "2026-02-08T00:00:00.000Z"
  */
+function normalizeIsoPrecision(iso: string): string {
+  return iso.replace(/\.(\d+)Z$/, (_match, frac: string) => {
+    const ms = (frac + '000').slice(0, 3);
+    return `.${ms}Z`;
+  });
+}
+
+function normalizeGraphDate(dt?: { dateTime: string; timeZone: string }): string | undefined {
+  if (!dt?.dateTime) return undefined;
+
+  // Microsoft Graph To Do uses a { dateTime, timeZone } pair.
+  // Often dateTime is "YYYY-MM-DDTHH:mm:ss(.sss)" with NO timezone suffix.
+  // Our canonical format expects RFC3339 / ISO with timezone (prefer Z for UTC).
+  let raw = dt.dateTime;
+
+  // If already has timezone info, normalize precision and return.
+  if (/[zZ]$/.test(raw) || /[+-]\d\d:\d\d$/.test(raw)) return normalizeIsoPrecision(raw);
+
+  // Normalize UTC-like values to Z.
+  if (dt.timeZone?.toUpperCase() === 'UTC') {
+    raw = `${raw}Z`;
+    return normalizeIsoPrecision(raw);
+  }
+
+  // Fallback: keep raw (better than guessing an offset).
+  return raw;
+}
+
+function toCanonical(t: GraphTask): Task {
+  return {
+    id: t.id,
+    title: t.title,
+    notes: t.body?.content,
+    status: t.status === 'completed' || t.completedDateTime ? 'completed' : 'active',
+    dueAt: normalizeGraphDate(t.dueDateTime),
+    updatedAt: t.lastModifiedDateTime,
+  };
+}
+
 export class MicrosoftTodoProvider implements TaskProvider {
   readonly name = 'microsoft' as const;
 
-  constructor(private _opts: MicrosoftTodoProviderOptions) {
-    // Intentionally empty for MVP
+  private fetcher: FetchLike;
+  private accessToken?: { token: string; expMs: number };
+  private resolvedListId?: string;
+
+  constructor(private opts: MicrosoftTodoProviderOptions) {
+    this.fetcher = opts.fetcher ?? fetch;
   }
 
-  async listTasks(_since?: string): Promise<Task[]> {
-    throw new Error(
-      'MicrosoftTodoProvider not implemented in MVP. Use `task-sync sync --dry-run` or implement provider.'
-    );
+  private async getAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this.accessToken && this.accessToken.expMs - 30_000 > now) return this.accessToken.token;
+
+    const body = new URLSearchParams({
+      client_id: this.opts.clientId,
+      refresh_token: this.opts.refreshToken,
+      grant_type: 'refresh_token',
+      // Keep scopes aligned with initial consent. Use Graph resource scopes.
+      scope: 'offline_access https://graph.microsoft.com/Tasks.ReadWrite https://graph.microsoft.com/User.Read',
+    });
+
+    const url = `https://login.microsoftonline.com/${encodeURIComponent(this.opts.tenantId)}/oauth2/v2.0/token`;
+    const res = await this.fetcher(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Microsoft token refresh failed: HTTP ${res.status} ${txt}`);
+    }
+
+    const json = (await res.json()) as MsTokenResponse;
+
+    // Microsoft can rotate refresh tokens. Keep using the latest one in-memory so polling works.
+    if (json.refresh_token) this.opts.refreshToken = json.refresh_token;
+
+    this.accessToken = { token: json.access_token, expMs: now + json.expires_in * 1000 };
+    return json.access_token;
   }
 
-  async upsertTask(_input: Omit<Task, 'updatedAt'> & { updatedAt?: string }): Promise<Task> {
-    throw new Error(
-      'MicrosoftTodoProvider not implemented in MVP. Use `task-sync sync --dry-run` or implement provider.'
-    );
+  private async api<T>(pathOrUrl: string, init?: Parameters<typeof requestJson<T>>[1]): Promise<T> {
+    const token = await this.getAccessToken();
+    const base = `https://graph.microsoft.com/v1.0`;
+    const url = pathOrUrl.startsWith('https://') ? pathOrUrl : `${base}${pathOrUrl}`;
+    return requestJson<T>(url, { ...init, headers: { authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } }, this.fetcher);
   }
 
-  async deleteTask(_id: string): Promise<void> {
-    throw new Error(
-      'MicrosoftTodoProvider not implemented in MVP. Use `task-sync sync --dry-run` or implement provider.'
-    );
+  private async getListId(): Promise<string> {
+    if (this.resolvedListId) return this.resolvedListId;
+    if (this.opts.listId) {
+      this.resolvedListId = this.opts.listId;
+      return this.opts.listId;
+    }
+
+    const lists = await this.api<GraphListListsResponse>(`/me/todo/lists`);
+    const first = lists.value?.[0];
+    if (!first) throw new Error('Microsoft To Do: no lists found for this account');
+    this.resolvedListId = first.id;
+    return first.id;
+  }
+
+  async listTasks(since?: string): Promise<Task[]> {
+    const listId = await this.getListId();
+
+    const out: Task[] = [];
+
+    // Build the initial URL. When `since` is provided, use a server-side
+    // OData $filter on lastModifiedDateTime so Graph only returns changed
+    // tasks instead of the full list.
+    let next: string | undefined;
+    if (since) {
+      const filter = `lastModifiedDateTime ge ${since}`;
+      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100&$filter=${encodeURIComponent(filter)}`;
+    } else {
+      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100`;
+    }
+
+    while (next) {
+      const url = next;
+      const res: GraphListTasksResponse = await this.api<GraphListTasksResponse>(url);
+      for (const t of res.value ?? []) out.push(toCanonical(t));
+      next = res['@odata.nextLink'];
+    }
+
+    return out;
+  }
+
+  async upsertTask(input: Omit<Task, 'updatedAt'> & { updatedAt?: string }): Promise<Task> {
+    const listId = await this.getListId();
+    const isCreate = !input.id;
+
+    const payload: Partial<GraphTask> & { body?: GraphBody } = {
+      title: input.title,
+      body: input.notes
+        ? {
+            contentType: 'text',
+            content: input.notes,
+          }
+        : undefined,
+      dueDateTime: input.dueAt
+        ? {
+            dateTime: input.dueAt,
+            timeZone: 'UTC',
+          }
+        : undefined,
+      // Graph expects status mutations, not completedDateTime writes.
+      status: input.status === 'completed' ? 'completed' : 'notStarted',
+    };
+
+    const res = isCreate
+      ? await this.api<GraphTask>(`/me/todo/lists/${encodeURIComponent(listId)}/tasks`, {
+          method: 'POST',
+          body: payload,
+        })
+      : await this.api<GraphTask>(
+          `/me/todo/lists/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(input.id)}`,
+          {
+            method: 'PATCH',
+            body: payload,
+          },
+        );
+
+    return toCanonical(res);
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    const listId = await this.getListId();
+    await this.api<void>(`/me/todo/lists/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   }
 }

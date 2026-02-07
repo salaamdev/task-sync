@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Task } from '../model.js';
+import type { ProviderName, Task } from '../model.js';
 import type { TaskProvider } from './provider.js';
 
 /**
@@ -10,10 +10,10 @@ import type { TaskProvider } from './provider.js';
  * - Supports delete (tombstone via status='deleted').
  */
 export class MockProvider implements TaskProvider {
-  readonly name: 'mockA' | 'mockB';
+  readonly name: ProviderName;
   private tasks = new Map<string, Task>();
 
-  constructor(opts?: { name?: 'mockA' | 'mockB'; tasks?: Task[] }) {
+  constructor(opts?: { name?: ProviderName; tasks?: Task[] }) {
     this.name = opts?.name ?? 'mockA';
     for (const t of opts?.tasks ?? []) this.tasks.set(t.id, t);
   }

@@ -12,5 +12,9 @@ yarn-error.log*
 # local state
 .task-sync/
 
+# local env
+.env.local
+.env
+
 # OS
 .DS_Store

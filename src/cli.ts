@@ -14,7 +14,7 @@ const program = new Command();
 
 program
   .name('task-sync')
-  .description('Sync tasks between providers (MVP: dry-run with mock providers)')
+  .description('Sync tasks between Google Tasks and Microsoft To Do')
   .version('0.1.0');
 
 program
@@ -40,84 +40,141 @@ program
     else if (report.missing.length) process.exitCode = 2;
   });
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 program
   .command('sync')
-  .description('Run sync engine')
-  .option('--dry-run', 'Use mock providers and do not persist state')
+  .description('Run sync engine (2-3 providers)')
+  .option('--dry-run', 'Do not perform writes/deletes (still uses configured providers)')
   .option('--state-dir <dir>', 'Override state dir (default: .task-sync or TASK_SYNC_STATE_DIR)')
   .option('--format <format>', 'Output format: pretty|json', 'pretty')
-  .action(async (opts: { dryRun?: boolean; stateDir?: string; format?: string }) => {
+  .option('--poll <minutes>', 'Polling mode: run sync every N minutes (or use TASK_SYNC_POLL_INTERVAL_MINUTES)')
+  .action(async (opts: { dryRun?: boolean; stateDir?: string; format?: string; poll?: string }) => {
     const env = readEnv();
     const logger = createLogger(env.TASK_SYNC_LOG_LEVEL ?? 'info');
 
-    const engine = new SyncEngine(new JsonStore(opts.stateDir ?? env.TASK_SYNC_STATE_DIR));
+    const store = new JsonStore(opts.stateDir ?? env.TASK_SYNC_STATE_DIR);
+    const engine = new SyncEngine(store);
 
     const dryRun = !!opts.dryRun;
 
-    if (!dryRun) {
-      const dr = doctorReport(env);
-      if (!dr.providers.a || !dr.providers.b || dr.missing.length) {
-        console.error('Configuration incomplete. Run: task-sync doctor');
-        process.exitCode = 2;
-        return;
-      }
+    const providers = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B].filter(
+      Boolean,
+    ) as Array<'google' | 'microsoft'>;
+
+    if (providers.length < 2) {
+      console.error('Need at least 2 providers. Set TASK_SYNC_PROVIDER_A=google + TASK_SYNC_PROVIDER_B=microsoft.');
+      process.exitCode = 2;
+      return;
     }
 
-    const providerA = dryRun
-      ? new MockProvider({
-          name: 'mockA',
-          tasks: [
-            {
-              id: 'a1',
-              title: 'Mock A task',
-              status: 'active',
-              updatedAt: new Date(Date.now() - 60_000).toISOString(),
-            },
-          ],
-        })
-      : env.TASK_SYNC_PROVIDER_A === 'google'
-        ? new GoogleTasksProvider({
-            clientId: env.TASK_SYNC_GOOGLE_CLIENT_ID!,
-            clientSecret: env.TASK_SYNC_GOOGLE_CLIENT_SECRET!,
-            refreshToken: env.TASK_SYNC_GOOGLE_REFRESH_TOKEN!,
-            tasklistId: env.TASK_SYNC_GOOGLE_TASKLIST_ID,
-          })
-        : new MicrosoftTodoProvider({
-            clientId: env.TASK_SYNC_MS_CLIENT_ID!,
-            tenantId: env.TASK_SYNC_MS_TENANT_ID!,
-            refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
-            listId: env.TASK_SYNC_MS_LIST_ID,
-          });
+    const dr = doctorReport(env);
+    if (!dryRun && dr.missing.length) {
+      console.error('Configuration incomplete. Run: task-sync doctor');
+      process.exitCode = 2;
+      return;
+    }
 
-    const providerB = dryRun
-      ? new MockProvider({
-          name: 'mockB',
-          tasks: [
-            {
-              id: 'b1',
-              title: 'Mock B task',
-              status: 'active',
-              updatedAt: new Date(Date.now() - 120_000).toISOString(),
-            },
-          ],
-        })
-      : env.TASK_SYNC_PROVIDER_B === 'google'
-        ? new GoogleTasksProvider({
-            clientId: env.TASK_SYNC_GOOGLE_CLIENT_ID!,
-            clientSecret: env.TASK_SYNC_GOOGLE_CLIENT_SECRET!,
-            refreshToken: env.TASK_SYNC_GOOGLE_REFRESH_TOKEN!,
-            tasklistId: env.TASK_SYNC_GOOGLE_TASKLIST_ID,
-          })
-        : new MicrosoftTodoProvider({
-            clientId: env.TASK_SYNC_MS_CLIENT_ID!,
-            tenantId: env.TASK_SYNC_MS_TENANT_ID!,
-            refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
-            listId: env.TASK_SYNC_MS_LIST_ID,
-          });
+    const makeProvider = (p: 'google' | 'microsoft') => {
+      if (p === 'google') {
+        return new GoogleTasksProvider({
+          clientId: env.TASK_SYNC_GOOGLE_CLIENT_ID!,
+          clientSecret: env.TASK_SYNC_GOOGLE_CLIENT_SECRET!,
+          refreshToken: env.TASK_SYNC_GOOGLE_REFRESH_TOKEN!,
+          tasklistId: env.TASK_SYNC_GOOGLE_TASKLIST_ID,
+        });
+      }
+      return new MicrosoftTodoProvider({
+        clientId: env.TASK_SYNC_MS_CLIENT_ID!,
+        tenantId: env.TASK_SYNC_MS_TENANT_ID!,
+        refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
+        listId: env.TASK_SYNC_MS_LIST_ID,
+      });
+    };
 
-    logger.info(`sync start (dryRun=${dryRun})`, { a: providerA.name, b: providerB.name });
+    const providerInstances = providers.map(makeProvider);
 
-    const report = await engine.sync(providerA, providerB, { dryRun });
+    const pollMinutes = opts.poll ? Number(opts.poll) : env.TASK_SYNC_POLL_INTERVAL_MINUTES;
+    const polling = Number.isFinite(pollMinutes) && (pollMinutes ?? 0) > 0;
+
+    let runCount = 0;
+    while (true) {
+      runCount++;
+      logger.info(`sync start (dryRun=${dryRun}, run=${runCount})`, { providers });
+
+      const report = await engine.syncMany(providerInstances, {
+      dryRun,
+      mode: env.TASK_SYNC_MODE ?? 'bidirectional',
+      tombstoneTtlDays: env.TASK_SYNC_TOMBSTONE_TTL_DAYS ?? 30,
+    });
+
+      if ((opts.format ?? 'pretty') === 'json') {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(`task-sync report`);
+        console.log(`providers: ${report.providers.join(' <-> ')}`);
+        console.log(`lastSyncAt: ${report.lastSyncAt ?? '(none)'}`);
+        console.log(`newLastSyncAt: ${report.newLastSyncAt}`);
+        console.log(`dryRun: ${report.dryRun}`);
+        console.log(`durationMs: ${report.durationMs}`);
+
+        console.log('\ncounts:');
+        for (const k of Object.keys(report.counts) as Array<keyof typeof report.counts>) {
+          console.log(`- ${k}: ${report.counts[k]}`);
+        }
+
+        if (report.errors.length) {
+          console.log('\nerrors:');
+          for (const e of report.errors) console.log(`- ${e.provider} (${e.stage}): ${e.error}`);
+        }
+
+        if (report.conflicts.length) {
+          console.log(`\nconflicts: ${report.conflicts.length} (see conflicts.log in state dir)`);
+        }
+
+        console.log('\nactions:');
+        for (const a of report.actions) {
+          const exec = a.executed ? 'exec' : 'plan';
+          const tgt = a.target.id ? `${a.target.provider}:${a.target.id}` : a.target.provider;
+          console.log(
+            `- [${exec}] ${a.kind} ${tgt} <= ${a.source.provider}:${a.source.id} ${a.title ? `"${a.title}"` : ''} :: ${a.detail}`,
+          );
+        }
+      }
+
+      if (!polling) break;
+
+      const waitMs = Math.max(1, pollMinutes!) * 60_000;
+      logger.info(`poll sleep ${pollMinutes}m`);
+      await sleep(waitMs);
+    }
+  });
+
+program
+  .command('mock')
+  .description('Run a 2-provider dry-run using in-memory mock providers (for demos/tests)')
+  .option('--format <format>', 'Output format: pretty|json', 'pretty')
+  .action(async (opts: { format?: string }) => {
+    const logger = createLogger('info');
+    const engine = new SyncEngine(new JsonStore());
+
+    const a = new MockProvider({
+      name: 'mockA',
+      tasks: [
+        {
+          id: 'a1',
+          title: 'Mock A task',
+          status: 'active',
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+      ],
+    });
+    const b = new MockProvider({ name: 'mockB', tasks: [] });
+
+    logger.info('mock sync start', { providers: [a.name, b.name] });
+    const report = await engine.syncMany([a, b], { dryRun: true });
 
     if ((opts.format ?? 'pretty') === 'json') {
       console.log(JSON.stringify(report, null, 2));
@@ -125,22 +182,9 @@ program
     }
 
     console.log(`task-sync report`);
-    console.log(`providers: ${report.providerA} <-> ${report.providerB}`);
-    console.log(`lastSyncAt: ${report.lastSyncAt ?? '(none)'}`);
+    console.log(`providers: ${report.providers.join(' <-> ')}`);
     console.log(`newLastSyncAt: ${report.newLastSyncAt}`);
     console.log(`dryRun: ${report.dryRun}`);
-
-    console.log('\ncounts:');
-    for (const k of Object.keys(report.counts) as Array<keyof typeof report.counts>) {
-      console.log(`- ${k}: ${report.counts[k]}`);
-    }
-
-    console.log('\nactions:');
-    for (const a of report.actions) {
-      const exec = a.executed ? 'exec' : 'plan';
-      const tgt = a.target.id ? `${a.target.provider}:${a.target.id}` : a.target.provider;
-      console.log(`- [${exec}] ${a.kind} ${tgt} <= ${a.source.provider}:${a.source.id} ${a.title ? `"${a.title}"` : ''}`);
-    }
   });
 
 program.parseAsync(process.argv).catch((err) => {
