@@ -48,12 +48,12 @@ beforeAll(async () => {
   // Write to project root .env (the web app reads from parent)
   await writeFile(path.resolve(import.meta.dirname, '..', '.env.test'), envContent);
 
-  // Start the production server
-  server = spawn('npx', ['next', 'start', '-p', String(PORT)], {
+  // Start a Next.js dev server (avoids requiring a pre-built .next directory in CI)
+  server = spawn('npx', ['next', 'dev', '-p', String(PORT)], {
     cwd: WEB_DIR,
     env: {
       ...process.env,
-      NODE_ENV: 'production',
+      NODE_ENV: 'development',
       TASK_SYNC_GOOGLE_CLIENT_ID: 'test-google-id',
       TASK_SYNC_GOOGLE_CLIENT_SECRET: 'test-google-secret',
       TASK_SYNC_MS_CLIENT_ID: 'test-ms-id',
