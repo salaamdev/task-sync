@@ -90,6 +90,8 @@ program
         clientId: env.TASK_SYNC_MS_CLIENT_ID!,
         tenantId: env.TASK_SYNC_MS_TENANT_ID!,
         refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
+        // CLI uses public client flow (Mobile/Desktop platform) — no secret needed.
+        // The web UI uses confidential client flow (Web platform) with its own secret.
         listId: env.TASK_SYNC_MS_LIST_ID,
       });
     };

@@ -1,6 +1,7 @@
-import type { Task } from '../model.js';
+import type { Task, Importance } from '../model.js';
 import type { TaskProvider } from './provider.js';
 import { requestJson, type FetchLike } from '../http.js';
+import { extractMetadata, embedMetadata, type ExtendedFields } from '../extended-fields.js';
 
 export interface GoogleTasksProviderOptions {
   /** OAuth client id */
@@ -37,12 +38,25 @@ interface GoogleListTasksResponse {
 }
 
 function toCanonical(t: GoogleTask): Task {
+  // Extract metadata block from notes to restore extended fields
+  const { cleanNotes, fields } = extractMetadata(t.notes ?? '');
+
   return {
     id: t.id,
     title: t.title,
-    notes: t.notes,
+    notes: cleanNotes || undefined,
     status: t.status === 'completed' ? 'completed' : 'active',
     dueAt: t.due,
+
+    // Restore extended fields from metadata block
+    dueTime: fields.dueTime,
+    reminder: fields.reminder,
+    recurrence: fields.recurrence,
+    categories: fields.categories,
+    importance: fields.importance as Importance | undefined,
+    steps: fields.steps,
+    startAt: fields.startAt,
+
     updatedAt: t.updated,
   };
 }
@@ -121,9 +135,21 @@ export class GoogleTasksProvider implements TaskProvider {
     const tasklistId = this.opts.tasklistId ?? '@default';
     const isCreate = !input.id;
 
+    // Embed extended fields (unsupported by Google Tasks) into notes
+    const extraFields: ExtendedFields = {
+      dueTime: input.dueTime,
+      reminder: input.reminder,
+      recurrence: input.recurrence,
+      categories: input.categories,
+      importance: input.importance,
+      steps: input.steps,
+      startAt: input.startAt,
+    };
+    const notesWithMeta = embedMetadata(input.notes ?? '', extraFields);
+
     const payload: Partial<GoogleTask> = {
       title: input.title,
-      notes: input.notes,
+      notes: notesWithMeta || undefined,
       status: input.status === 'completed' ? 'completed' : 'needsAction',
       due: input.dueAt,
     };

@@ -1,6 +1,14 @@
-import type { Task } from '../model.js';
+import type { Task, Importance } from '../model.js';
 import type { TaskProvider } from './provider.js';
 import { requestJson, type FetchLike } from '../http.js';
+import {
+  serializeRecurrence,
+  deserializeRecurrence,
+  extractTimeFromIso,
+  combineDateAndTime,
+  normalizeDateOnly,
+  type GraphRecurrence,
+} from '../extended-fields.js';
 
 export interface MicrosoftTodoProviderOptions {
   /** Azure AD app client id */
@@ -9,6 +17,8 @@ export interface MicrosoftTodoProviderOptions {
   tenantId: string;
   /** OAuth refresh token */
   refreshToken: string;
+  /** Client secret (required for confidential/web clients) */
+  clientSecret?: string;
   /** Task list id (defaults to first list) */
   listId?: string;
   /** Inject fetch for tests */
@@ -39,16 +49,36 @@ interface GraphBody {
   contentType: 'text' | 'html';
 }
 
+interface GraphDateTimeTimeZone {
+  dateTime: string;
+  timeZone: string;
+}
+
+interface GraphChecklistItem {
+  id?: string;
+  displayName: string;
+  isChecked: boolean;
+}
+
 interface GraphTask {
   id: string;
   title: string;
   body?: GraphBody;
-  dueDateTime?: { dateTime: string; timeZone: string };
-  completedDateTime?: { dateTime: string; timeZone: string };
+  dueDateTime?: GraphDateTimeTimeZone;
+  completedDateTime?: GraphDateTimeTimeZone;
   /** Graph To Do supports a status field. Completed date is derived server-side. */
   status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred' | string;
   lastModifiedDateTime: string;
   createdDateTime: string;
+
+  // Extended fields
+  reminderDateTime?: GraphDateTimeTimeZone;
+  isReminderOn?: boolean;
+  recurrence?: GraphRecurrence;
+  categories?: string[];
+  importance?: 'low' | 'normal' | 'high';
+  startDateTime?: GraphDateTimeTimeZone;
+  checklistItems?: GraphChecklistItem[];
 }
 
 interface GraphListTasksResponse {
@@ -67,7 +97,7 @@ function normalizeIsoPrecision(iso: string): string {
   });
 }
 
-function normalizeGraphDate(dt?: { dateTime: string; timeZone: string }): string | undefined {
+function normalizeGraphDate(dt?: GraphDateTimeTimeZone): string | undefined {
   if (!dt?.dateTime) return undefined;
 
   // Microsoft Graph To Do uses a { dateTime, timeZone } pair.
@@ -89,12 +119,34 @@ function normalizeGraphDate(dt?: { dateTime: string; timeZone: string }): string
 }
 
 function toCanonical(t: GraphTask): Task {
+  const dueFull = normalizeGraphDate(t.dueDateTime);
+
   return {
     id: t.id,
     title: t.title,
     notes: t.body?.content,
     status: t.status === 'completed' || t.completedDateTime ? 'completed' : 'active',
-    dueAt: normalizeGraphDate(t.dueDateTime),
+
+    // Split due into date-only + time for cross-provider compat
+    dueAt: dueFull ? normalizeDateOnly(dueFull) : undefined,
+    dueTime: dueFull ? extractTimeFromIso(dueFull) : undefined,
+
+    // Extended fields
+    reminder:
+      t.isReminderOn && t.reminderDateTime
+        ? normalizeGraphDate(t.reminderDateTime)
+        : undefined,
+    recurrence: t.recurrence ? serializeRecurrence(t.recurrence) : undefined,
+    categories: t.categories?.length ? t.categories : undefined,
+    importance:
+      t.importance && t.importance !== 'normal'
+        ? (t.importance as Importance)
+        : undefined,
+    steps: t.checklistItems?.length
+      ? t.checklistItems.map((i) => ({ text: i.displayName, checked: i.isChecked }))
+      : undefined,
+    startAt: normalizeGraphDate(t.startDateTime),
+
     updatedAt: t.lastModifiedDateTime,
   };
 }
@@ -121,6 +173,9 @@ export class MicrosoftTodoProvider implements TaskProvider {
       // Keep scopes aligned with initial consent. Use Graph resource scopes.
       scope: 'offline_access https://graph.microsoft.com/Tasks.ReadWrite https://graph.microsoft.com/User.Read',
     });
+
+    // Confidential clients (web apps) require client_secret for token refresh.
+    if (this.opts.clientSecret) body.set('client_secret', this.opts.clientSecret);
 
     const url = `https://login.microsoftonline.com/${encodeURIComponent(this.opts.tenantId)}/oauth2/v2.0/token`;
     const res = await this.fetcher(url, {
@@ -173,11 +228,14 @@ export class MicrosoftTodoProvider implements TaskProvider {
     // OData $filter on lastModifiedDateTime so Graph only returns changed
     // tasks instead of the full list.
     let next: string | undefined;
+    const base = `/me/todo/lists/${encodeURIComponent(listId)}/tasks`;
+    const expand = '$expand=checklistItems';
+
     if (since) {
       const filter = `lastModifiedDateTime ge ${since}`;
-      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100&$filter=${encodeURIComponent(filter)}`;
+      next = `${base}?$top=100&${expand}&$filter=${encodeURIComponent(filter)}`;
     } else {
-      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100`;
+      next = `${base}?$top=100&${expand}`;
     }
 
     while (next) {
@@ -194,23 +252,53 @@ export class MicrosoftTodoProvider implements TaskProvider {
     const listId = await this.getListId();
     const isCreate = !input.id;
 
-    const payload: Partial<GraphTask> & { body?: GraphBody } = {
+    // Reconstruct full due datetime from date + time components
+    const dueIso = input.dueAt
+      ? combineDateAndTime(input.dueAt, input.dueTime)
+      : undefined;
+
+    // Core fields — always included
+    const payload: Record<string, unknown> = {
       title: input.title,
       body: input.notes
-        ? {
-            contentType: 'text',
-            content: input.notes,
-          }
+        ? { contentType: 'text', content: input.notes }
         : undefined,
-      dueDateTime: input.dueAt
-        ? {
-            dateTime: input.dueAt,
-            timeZone: 'UTC',
-          }
+      dueDateTime: dueIso
+        ? { dateTime: dueIso, timeZone: 'UTC' }
         : undefined,
       // Graph expects status mutations, not completedDateTime writes.
       status: input.status === 'completed' ? 'completed' : 'notStarted',
     };
+
+    // Extended fields — only include if they have values.
+    // For PATCH (updates), omitting a field means "don't change it".
+    // This avoids overwriting server-managed fields like recurrence
+    // with reconstructed values that may differ in startDate, etc.
+    if (input.reminder) {
+      payload.isReminderOn = true;
+      payload.reminderDateTime = { dateTime: input.reminder, timeZone: 'UTC' };
+    }
+    if (input.categories?.length) {
+      payload.categories = input.categories;
+    }
+    if (input.importance) {
+      payload.importance = input.importance;
+    }
+    if (input.startAt) {
+      payload.startDateTime = { dateTime: input.startAt, timeZone: 'UTC' };
+    }
+
+    // Recurrence: only set on CREATE. For PATCH, let Microsoft manage it
+    // to avoid conflicts with server-side recurrence state.
+    if (isCreate && input.recurrence) {
+      const rec = deserializeRecurrence(input.recurrence);
+      if (rec) payload.recurrence = rec;
+    }
+
+    // Remove undefined values (don't send to API)
+    for (const k of Object.keys(payload)) {
+      if (payload[k] === undefined) delete payload[k];
+    }
 
     const res = isCreate
       ? await this.api<GraphTask>(`/me/todo/lists/${encodeURIComponent(listId)}/tasks`, {

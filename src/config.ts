@@ -25,6 +25,7 @@ export const EnvSchema = z.object({
 
   // Microsoft Graph
   TASK_SYNC_MS_CLIENT_ID: str.optional(),
+  TASK_SYNC_MS_CLIENT_SECRET: str.optional(),
   TASK_SYNC_MS_TENANT_ID: str.optional(),
   TASK_SYNC_MS_REFRESH_TOKEN: str.optional(),
   TASK_SYNC_MS_LIST_ID: str.optional(),
