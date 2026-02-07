@@ -7,7 +7,7 @@
   </p>
   <p align="center">
     <a href="https://github.com/salaamdev/task-sync/actions"><img src="https://github.com/salaamdev/task-sync/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-    <a href="https://github.com/salaamdev/task-sync/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+    <a href="https://github.com/salaamdev/task-sync/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
     <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node.js >= 22" />
     <img src="https://img.shields.io/badge/TypeScript-5.9-blue" alt="TypeScript" />
   </p>
@@ -853,14 +853,4 @@ Contributions are welcome! Here's how to get started:
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
-
-```
-Copyright 2025 salaamdev
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+[MIT](LICENSE) — free to use, modify, and distribute. Just keep the copyright notice.
