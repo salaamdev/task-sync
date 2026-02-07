@@ -101,7 +101,8 @@ export async function requestJson<T>(
       if (!res.ok) {
         const txt = await res.text().catch(() => undefined);
         const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
-        const err = new HttpError(`HTTP ${res.status} for ${finalUrl}`, res.status, finalUrl, txt, retryAfterMs);
+        const detail = txt ? ` — ${txt.slice(0, 300)}` : '';
+        const err = new HttpError(`HTTP ${res.status} for ${finalUrl}${detail}`, res.status, finalUrl, txt, retryAfterMs);
         if (attempt <= retries && isTransientStatus(res.status)) {
           const wait = retryAfterMs ?? backoffMs * 2 ** (attempt - 1);
           await sleep(wait);

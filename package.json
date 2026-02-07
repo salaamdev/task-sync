@@ -11,7 +11,11 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "oauth:google": "tsx scripts/google_oauth.ts",
-    "oauth:microsoft": "tsx scripts/microsoft_oauth.ts"
+    "oauth:microsoft": "tsx scripts/microsoft_oauth.ts",
+    "web:dev": "npm run build && npm run --prefix web dev",
+    "web:build": "npm run build && npm run --prefix web build",
+    "web:start": "npm run --prefix web start",
+    "web:install": "npm install --prefix web"
   },
   "repository": {
     "type": "git",

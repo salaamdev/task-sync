@@ -59,7 +59,7 @@ describe('MicrosoftTodoProvider', () => {
       title: 'Hi',
       notes: 'B',
       status: 'active',
-      dueAt: '2026-02-10T00:00:00.000Z',
+      dueAt: '2026-02-10T12:00:00.000Z',
       updatedAt: '2026-02-06T00:00:00.000Z',
     });
   });

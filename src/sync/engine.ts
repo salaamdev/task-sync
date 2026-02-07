@@ -1,5 +1,5 @@
 import { appendFile } from 'node:fs/promises';
-import type { ProviderName, Task } from '../model.js';
+import type { ProviderName, Task, TaskStatus, Importance, ChecklistItem } from '../model.js';
 import type { TaskProvider } from '../providers/provider.js';
 import { JsonStore, type MappingRecord } from '../store/jsonStore.js';
 import { acquireLock } from '../store/lock.js';
@@ -30,7 +30,7 @@ export interface SyncAction {
 
 export interface SyncConflict {
   canonicalId: string;
-  field: 'title' | 'notes' | 'dueAt' | 'status';
+  field: string;
   providers: Array<{ provider: string; id: string; updatedAt: string; value: unknown }>;
   winner: { provider: string; id: string; updatedAt: string };
   overwritten: Array<{ provider: string; id: string }>;
@@ -69,25 +69,22 @@ function normField(s?: string): string {
 }
 
 /**
- * Normalize an ISO timestamp for comparison.
- * Truncates fractional seconds to milliseconds so that providers returning
- * different precisions (e.g. ".000Z" vs ".0000000Z") compare as equal.
+ * Semantic equality for a task field. Handles undefined/empty normalization,
+ * ISO timestamp precision differences, and complex types (arrays, objects).
  */
-function normIso(s?: string): string {
-  if (!s) return '';
-  return s.replace(/\.(\d+)Z$/, (_match, frac: string) => {
-    const ms = (frac + '000').slice(0, 3);
-    return `.${ms}Z`;
-  });
-}
-
-/**
- * Semantic equality for a task field. Handles undefined/empty normalization
- * and ISO timestamp precision differences.
- */
-function fieldEqual(field: 'title' | 'notes' | 'dueAt' | 'status', a?: string, b?: string): boolean {
-  if (field === 'dueAt') return normIso(a) === normIso(b);
-  if (field === 'notes') return normField(a) === normField(b);
+function fieldEqual(field: string, a: unknown, b: unknown): boolean {
+  // Date-only fields: compare YYYY-MM-DD part only (ignore time, avoids noon-vs-midnight mismatches)
+  if (field === 'dueAt' || field === 'startAt') {
+    const da = ((a as string) ?? '').split('T')[0];
+    const db = ((b as string) ?? '').split('T')[0];
+    return da === db;
+  }
+  if (field === 'notes') return normField(a as string) === normField(b as string);
+  // Array / object fields: compare by JSON (order-sensitive but consistent per-provider)
+  if (field === 'categories' || field === 'steps') {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  }
+  // String fields (title, status, dueTime, reminder, recurrence, importance)
   return (a ?? '') === (b ?? '');
 }
 
@@ -381,7 +378,10 @@ export class SyncEngine {
         if (byProvTask.size === 0) continue;
 
         type CanonicalData = Omit<Task, 'id'>;
-        const fields = ['title', 'notes', 'dueAt', 'status'] as const;
+        const fields = [
+          'title', 'notes', 'dueAt', 'status',
+          'dueTime', 'reminder', 'recurrence', 'categories', 'importance', 'steps', 'startAt',
+        ] as const;
         type Field = (typeof fields)[number];
 
         const firstTask = [...byProvTask.values()][0]!;
@@ -390,7 +390,14 @@ export class SyncEngine {
           title: baseline?.title ?? firstTask.title,
           notes: baseline?.notes,
           dueAt: baseline?.dueAt,
+          dueTime: baseline?.dueTime,
           status: baseline?.status ?? firstTask.status,
+          reminder: baseline?.reminder,
+          recurrence: baseline?.recurrence,
+          categories: baseline?.categories,
+          importance: baseline?.importance,
+          steps: baseline?.steps,
+          startAt: baseline?.startAt,
           metadata: baseline?.metadata,
           updatedAt: baseline?.updatedAt ?? firstTask.updatedAt,
         };
@@ -402,7 +409,7 @@ export class SyncEngine {
           for (const f of fields) {
             const baseVal = baseline ? baseline[f] : undefined;
             const val = t[f];
-            if (!fieldEqual(f, baseVal as string | undefined, val as string | undefined)) set.add(f);
+            if (!fieldEqual(f, baseVal, val)) set.add(f);
           }
           if (set.size) changedBy.set(prov, set);
         }
@@ -414,20 +421,19 @@ export class SyncEngine {
             if (set.has(f)) contenders.push({ prov, t: byProvTask.get(prov)! });
           }
 
-          const assign = (field: Field, val: Task[Field]) => {
+          const assign = (field: Field, val: unknown) => {
             switch (field) {
-              case 'title':
-                canonical.title = val as Task['title'];
-                break;
-              case 'notes':
-                canonical.notes = val as Task['notes'];
-                break;
-              case 'dueAt':
-                canonical.dueAt = val as Task['dueAt'];
-                break;
-              case 'status':
-                canonical.status = val as Task['status'];
-                break;
+              case 'title':    canonical.title = val as string; break;
+              case 'notes':    canonical.notes = val as string | undefined; break;
+              case 'dueAt':    canonical.dueAt = val as string | undefined; break;
+              case 'status':   canonical.status = val as TaskStatus; break;
+              case 'dueTime':  canonical.dueTime = val as string | undefined; break;
+              case 'reminder': canonical.reminder = val as string | undefined; break;
+              case 'recurrence': canonical.recurrence = val as string | undefined; break;
+              case 'categories': canonical.categories = val as string[] | undefined; break;
+              case 'importance': canonical.importance = val as Importance | undefined; break;
+              case 'steps':    canonical.steps = val as ChecklistItem[] | undefined; break;
+              case 'startAt':  canonical.startAt = val as string | undefined; break;
             }
           };
 
@@ -491,7 +497,14 @@ export class SyncEngine {
                   title: canonical.title,
                   notes: canonical.notes,
                   dueAt: canonical.dueAt,
+                  dueTime: canonical.dueTime,
                   status: canonical.status,
+                  reminder: canonical.reminder,
+                  recurrence: canonical.recurrence,
+                  categories: canonical.categories,
+                  importance: canonical.importance,
+                  steps: canonical.steps,
+                  startAt: canonical.startAt,
                   metadata: canonical.metadata,
                   updatedAt: canonical.updatedAt,
                 });
@@ -525,7 +538,14 @@ export class SyncEngine {
                   title: canonical.title,
                   notes: canonical.notes,
                   dueAt: canonical.dueAt,
+                  dueTime: canonical.dueTime,
                   status: canonical.status,
+                  reminder: canonical.reminder,
+                  recurrence: canonical.recurrence,
+                  categories: canonical.categories,
+                  importance: canonical.importance,
+                  steps: canonical.steps,
+                  startAt: canonical.startAt,
                   metadata: canonical.metadata,
                   updatedAt: canonical.updatedAt,
                 });
@@ -542,11 +562,9 @@ export class SyncEngine {
           }
 
           // Update only if any field differs (using semantic comparison).
-          const differs =
-            !fieldEqual('title', existing.title, canonical.title) ||
-            !fieldEqual('notes', existing.notes, canonical.notes) ||
-            !fieldEqual('dueAt', existing.dueAt, canonical.dueAt) ||
-            !fieldEqual('status', existing.status, canonical.status);
+          const differs = fields.some(
+            (f) => !fieldEqual(f, existing[f as keyof Task], canonical[f as keyof CanonicalData]),
+          );
 
           if (!differs) {
             push({
@@ -566,7 +584,7 @@ export class SyncEngine {
             source: { provider: 'canonical', id: m.canonicalId },
             target: { provider: target.name, id: targetId },
             title: canonical.title,
-            detail: `field-level update (title/notes/status/dueAt)`,
+            detail: `field-level update`,
           });
 
           if (!dryRun) {
@@ -576,7 +594,14 @@ export class SyncEngine {
                 title: canonical.title,
                 notes: canonical.notes,
                 dueAt: canonical.dueAt,
+                dueTime: canonical.dueTime,
                 status: canonical.status,
+                reminder: canonical.reminder,
+                recurrence: canonical.recurrence,
+                categories: canonical.categories,
+                importance: canonical.importance,
+                steps: canonical.steps,
+                startAt: canonical.startAt,
                 metadata: canonical.metadata ?? existing.metadata,
                 updatedAt: canonical.updatedAt,
               });
