@@ -103,6 +103,10 @@ export class GoogleTasksProvider implements TaskProvider {
           showCompleted: true,
           showHidden: true,
           pageToken,
+          // Server-side filter: Google Tasks API supports updatedMin (RFC3339,
+          // returns tasks updated at-or-after the timestamp). This avoids
+          // fetching the full task list when only recent changes are needed.
+          ...(since ? { updatedMin: since } : {}),
         },
       });
 
@@ -110,9 +114,7 @@ export class GoogleTasksProvider implements TaskProvider {
       pageToken = res.nextPageToken;
     } while (pageToken);
 
-    if (!since) return out;
-    const sinceMs = Date.parse(since);
-    return out.filter((t) => Date.parse(t.updatedAt) >= sinceMs);
+    return out;
   }
 
   async upsertTask(input: Omit<Task, 'updatedAt'> & { updatedAt?: string }): Promise<Task> {

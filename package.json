@@ -1,7 +1,7 @@
 {
   "name": "task-sync",
   "version": "0.1.0",
-  "description": "Sync tasks between Microsoft To Do and Google Tasks",
+  "description": "Sync tasks between Google Tasks and Microsoft To Do",
   "main": "index.js",
   "scripts": {
     "test": "vitest run",

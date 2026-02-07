@@ -20,16 +20,20 @@ export async function acquireLock(dir: string, filename = 'lock'): Promise<LockH
     await writeFile(lockPath, payload, { flag: 'wx' });
   } catch {
     // If it exists, check whether it's stale.
+    let isHeld = false;
     try {
       const raw = await readFile(lockPath, 'utf8');
       const parsed = JSON.parse(raw) as { pid?: number };
       const otherPid = parsed.pid;
       if (otherPid && isProcessAlive(otherPid)) {
-        throw new Error(`Another task-sync process is running (pid=${otherPid}).`);
+        isHeld = true;
       }
-    } catch (err) {
+    } catch {
       // If unreadable/invalid, treat as stale.
-      void err;
+    }
+
+    if (isHeld) {
+      throw new Error(`Another task-sync process is running. Remove ${lockPath} if this is wrong.`);
     }
 
     // Stale lock: overwrite.

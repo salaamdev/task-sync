@@ -164,41 +164,14 @@ async function purgeMicrosoftAllLists(env: ReturnType<typeof readEnv>) {
   console.log(`MICROSOFT: deleted ${totalDeleted} tasks across all lists`);
 }
 
-async function purgeHabiticaAllTodos(env: ReturnType<typeof readEnv>) {
-  console.log('HABITICA: purge all todos');
-  const base = 'https://habitica.com/api/v3';
-  const headers = {
-    'x-api-user': env.TASK_SYNC_HABITICA_USER_ID!,
-    'x-api-key': env.TASK_SYNC_HABITICA_API_TOKEN!,
-    'x-client': 'task-sync (salaamdev)',
-  };
-
-  const res = await requestJson<{ success: boolean; data: Array<{ id: string; text: string; type: string }> }>(`${base}/tasks/user`, {
-    method: 'GET',
-    headers,
-    query: { type: 'todos' },
-  });
-
-  const todos = (res.data ?? []).filter((t) => t.type === 'todo');
-  console.log(`HABITICA: found ${todos.length} todos`);
-
-  let ok = 0;
-  for (const t of todos) {
-    await requestJson<void>(`${base}/tasks/${encodeURIComponent(t.id)}`, { method: 'DELETE', headers });
-    ok++;
-  }
-  console.log(`HABITICA: deleted ${ok} todos`);
-}
-
 async function main() {
   loadEnvFiles();
   const env = readEnv();
 
-  console.log('PURGE ALL LISTS: deleting tasks across ALL lists in Google Tasks + Microsoft To Do, and all Habitica todos.');
+  console.log('PURGE ALL LISTS: deleting tasks across ALL lists in Google Tasks + Microsoft To Do.');
 
   await purgeGoogleAllLists(env);
   await purgeMicrosoftAllLists(env);
-  await purgeHabiticaAllTodos(env);
 
   console.log('PURGE ALL LISTS DONE');
 }

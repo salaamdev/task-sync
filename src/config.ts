@@ -2,13 +2,12 @@ import { z } from 'zod';
 
 const str = z.string().min(1);
 
-export const ProviderSchema = z.enum(['google', 'microsoft', 'habitica']);
+export const ProviderSchema = z.enum(['google', 'microsoft']);
 
 export const EnvSchema = z.object({
-  // providers (supports up to 3 for MVP)
+  // providers
   TASK_SYNC_PROVIDER_A: ProviderSchema.optional(),
   TASK_SYNC_PROVIDER_B: ProviderSchema.optional(),
-  TASK_SYNC_PROVIDER_C: ProviderSchema.optional(),
 
   // behavior
   TASK_SYNC_LOG_LEVEL: z.enum(['silent', 'error', 'warn', 'info', 'debug']).optional(),
@@ -30,9 +29,6 @@ export const EnvSchema = z.object({
   TASK_SYNC_MS_REFRESH_TOKEN: str.optional(),
   TASK_SYNC_MS_LIST_ID: str.optional(),
 
-  // Habitica (token auth)
-  TASK_SYNC_HABITICA_USER_ID: str.optional(),
-  TASK_SYNC_HABITICA_API_TOKEN: str.optional(),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -42,7 +38,7 @@ export function readEnv(env = process.env): EnvConfig {
 }
 
 export function doctorReport(env = readEnv()) {
-  const providers = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B, env.TASK_SYNC_PROVIDER_C].filter(
+  const providers = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B].filter(
     Boolean,
   ) as Array<z.infer<typeof ProviderSchema>>;
 
@@ -50,7 +46,7 @@ export function doctorReport(env = readEnv()) {
   const notes: string[] = [];
 
   if (providers.length < 2) {
-    notes.push('Set TASK_SYNC_PROVIDER_A + TASK_SYNC_PROVIDER_B (and optional _C) to choose providers (google|microsoft|habitica).');
+    notes.push('Set TASK_SYNC_PROVIDER_A + TASK_SYNC_PROVIDER_B to choose providers (google|microsoft).');
   }
 
   for (const p of providers) {
@@ -66,17 +62,12 @@ export function doctorReport(env = readEnv()) {
       if (!env.TASK_SYNC_MS_REFRESH_TOKEN) missing.push('TASK_SYNC_MS_REFRESH_TOKEN');
       notes.push('Microsoft: TASK_SYNC_MS_LIST_ID optional (defaults to first list).');
     }
-    if (p === 'habitica') {
-      if (!env.TASK_SYNC_HABITICA_USER_ID) missing.push('TASK_SYNC_HABITICA_USER_ID');
-      if (!env.TASK_SYNC_HABITICA_API_TOKEN) missing.push('TASK_SYNC_HABITICA_API_TOKEN');
-    }
   }
 
   return {
     providers: {
       a: env.TASK_SYNC_PROVIDER_A,
       b: env.TASK_SYNC_PROVIDER_B,
-      c: env.TASK_SYNC_PROVIDER_C,
     },
     missing: [...new Set(missing)],
     notes: [...new Set(notes)],

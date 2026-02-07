@@ -9,7 +9,7 @@ import type { Task } from '../src/model.js';
 import type { TaskProvider } from '../src/providers/provider.js';
 
 describe('SyncEngine hardening', () => {
-  it('delete-wins-over-update: terminal status prevents resurrection', async () => {
+  it('completed status propagates via field-level update (not delete)', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'task-sync-'));
     const store = new JsonStore(dir);
     const engine = new SyncEngine(store);
@@ -42,15 +42,19 @@ describe('SyncEngine hardening', () => {
     });
     await store.save(s);
 
-    // Simulate B attempting an update (but A completed should win)
+    // Simulate B attempting a title update (but A's completed status should also propagate)
     await b.upsertTask({ id: 'b1', title: 'A updated', status: 'active', updatedAt: t1 });
 
     const report = await engine.syncMany([a, b], { dryRun: false });
-    expect(report.actions.some((x) => x.kind === 'delete')).toBe(true);
+    // Completed status should propagate as an update, not trigger a delete
+    expect(report.actions.some((x) => x.kind === 'update')).toBe(true);
+    expect(report.actions.some((x) => x.kind === 'delete')).toBe(false);
 
     const bAll = await b.listTasks();
     const bTask = bAll.find((t) => t.id === 'b1')!;
-    expect(bTask.status).toBe('deleted');
+    // B should now be completed (status synced from A), with title from B's update
+    expect(bTask.status).toBe('completed');
+    expect(bTask.title).toBe('A updated');
   });
 
   it('tombstone expiry prunes old tombstones', async () => {
@@ -141,23 +145,22 @@ describe('SyncEngine hardening', () => {
 
     const now = new Date().toISOString();
     const a = new MockProvider({ name: 'mockA', tasks: [{ id: 'a1', title: 'A', status: 'active', updatedAt: now }] });
-    const b = new MockProvider({ name: 'mockB', tasks: [] });
 
     const down: TaskProvider = {
-      name: 'habitica',
+      name: 'mockB',
       listTasks: async () => {
-        throw new Error('Habitica down');
+        throw new Error('Provider down');
       },
       upsertTask: async (_input: unknown): Promise<Task> => {
-        throw new Error('Habitica down');
+        throw new Error('Provider down');
       },
       deleteTask: async () => {
-        throw new Error('Habitica down');
+        throw new Error('Provider down');
       },
     };
 
-    const report = await engine.syncMany([a, b, down], { dryRun: true });
-    expect(report.providers).toEqual(['mockA', 'mockB']);
-    expect(report.errors.some((e) => e.provider === 'habitica')).toBe(true);
+    const report = await engine.syncMany([a, down], { dryRun: true });
+    expect(report.providers).toEqual(['mockA']);
+    expect(report.errors.some((e) => e.provider === 'mockB')).toBe(true);
   });
 });

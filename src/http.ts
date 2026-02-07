@@ -117,7 +117,9 @@ export async function requestJson<T>(
       if (!text) return undefined as T;
       return JSON.parse(text) as T;
     } catch (e) {
-      // network/parse errors
+      // Don't retry non-transient HTTP errors (400, 401, 403, 404, etc.)
+      if (e instanceof HttpError && !isTransientStatus(e.status)) throw e;
+      // Retry network/parse/transient errors
       if (attempt <= retries) {
         const wait = backoffMs * 2 ** (attempt - 1);
         await sleep(wait);

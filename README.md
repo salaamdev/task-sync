@@ -1,12 +1,11 @@
 # task-sync
 
-Sync tasks across **Google Tasks**, **Microsoft To Do (Microsoft Graph)**, and an optional 3rd provider.
+Sync tasks between **Google Tasks** and **Microsoft To Do**.
 
-Currently implemented providers:
+Providers:
 
 - Google Tasks (OAuth refresh-token)
 - Microsoft To Do via Microsoft Graph (OAuth refresh-token)
-- Habitica Todos (API token)
 
 ## Quickstart
 
@@ -56,12 +55,11 @@ node dist/cli.js sync --dry-run
 
 Create a `.env.local` (recommended) or `.env`:
 
-### Provider selection (2-3 providers)
+### Provider selection
 
 ```bash
 TASK_SYNC_PROVIDER_A=google
 TASK_SYNC_PROVIDER_B=microsoft
-TASK_SYNC_PROVIDER_C=habitica   # optional
 ```
 
 ### State
@@ -89,20 +87,13 @@ TASK_SYNC_MS_REFRESH_TOKEN=...
 TASK_SYNC_MS_LIST_ID=...        # optional (defaults to first list)
 ```
 
-### Habitica
-
-```bash
-TASK_SYNC_HABITICA_USER_ID=...
-TASK_SYNC_HABITICA_API_TOKEN=...
-```
-
 Run:
 
 ```bash
 task-sync doctor
 ```
 
-to see what’s missing.
+to see what's missing.
 
 ## OAuth helper scripts (refresh tokens)
 
@@ -143,14 +134,6 @@ export TASK_SYNC_MS_TENANT_ID=common
 npm run oauth:microsoft
 ```
 
-## Notes on Habitica mapping
-
-Habitica tasks are synced as **Todos**.
-
-- `Task.title` ↔ Habitica `text`
-- `Task.notes` ↔ Habitica `notes` (human notes only)
-- Extra fields are preserved by packing JSON into the Habitica `notes` field under a `--- task-sync ---` block.
-
 ## How state works
 
 `task-sync` writes local state under:
@@ -161,7 +144,7 @@ This includes:
 
 - `lastSyncAt` watermark (ISO timestamp)
 - `mappings`: links a canonical ID to provider IDs
-- `tombstones`: prevents resurrecting completed/deleted tasks
+- `tombstones`: prevents resurrecting deleted tasks
 
 Delete `.task-sync/` to reset sync state.
 

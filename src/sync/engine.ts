@@ -60,6 +60,37 @@ function norm(s?: string) {
   return (s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+/**
+ * Normalize a string field for comparison.
+ * Treats undefined, null, and empty/whitespace-only strings as equivalent.
+ */
+function normField(s?: string): string {
+  return (s ?? '').trim();
+}
+
+/**
+ * Normalize an ISO timestamp for comparison.
+ * Truncates fractional seconds to milliseconds so that providers returning
+ * different precisions (e.g. ".000Z" vs ".0000000Z") compare as equal.
+ */
+function normIso(s?: string): string {
+  if (!s) return '';
+  return s.replace(/\.(\d+)Z$/, (_match, frac: string) => {
+    const ms = (frac + '000').slice(0, 3);
+    return `.${ms}Z`;
+  });
+}
+
+/**
+ * Semantic equality for a task field. Handles undefined/empty normalization
+ * and ISO timestamp precision differences.
+ */
+function fieldEqual(field: 'title' | 'notes' | 'dueAt' | 'status', a?: string, b?: string): boolean {
+  if (field === 'dueAt') return normIso(a) === normIso(b);
+  if (field === 'notes') return normField(a) === normField(b);
+  return (a ?? '') === (b ?? '');
+}
+
 function matchKey(t: Task) {
   return `${norm(t.title)}\n${norm(t.notes)}`;
 }
@@ -112,6 +143,11 @@ export class SyncEngine {
       };
 
       const push = (a: SyncAction) => {
+        // Noops are counted but not stored in actions to keep reports concise.
+        if (a.kind === 'noop') {
+          counts.noop++;
+          return;
+        }
         actions.push(a);
         counts[a.kind]++;
       };
@@ -193,8 +229,11 @@ export class SyncEngine {
       // Helper: get mapping record for a provider task id.
       const mappingFor = (provider: ProviderName, id: string): MappingRecord => this.store.ensureMapping(state, provider, id);
 
-      // 4) Zombie prevention (delete-wins): process deletions/completions first.
-      const isTerminal = (t: Task) => t.status === 'deleted' || t.status === 'completed';
+      // 4) Zombie prevention (delete-wins): process hard-deletions first.
+      //    Completed tasks are NOT terminal — their status propagates via the
+      //    normal field-level update path (step 6) so they remain visible on
+      //    all providers as "completed" rather than being hard-deleted.
+      const isTerminal = (t: Task) => t.status === 'deleted';
 
       const tombstoneCanonicalIds = new Set<string>();
 
@@ -245,20 +284,67 @@ export class SyncEngine {
         }
       }
 
-      // 5) Orphan detection: mappings that point to tasks missing in ALL providers.
+      // 5) Orphan & external-deletion detection.
+      //    - If a task is missing from ALL providers → orphan, remove mapping.
+      //    - If a previously-synced task is missing from ONE provider (external deletion),
+      //      treat as delete: tombstone ALL sides and propagate the delete.
       for (const m of [...state.mappings]) {
-        const existsSomewhere = (Object.entries(m.byProvider) as Array<[ProviderName, string]>).some(([prov, pid]) => {
-          if (!pid) return false;
-          return snapshots.get(prov)?.index.has(pid) ?? false;
-        });
+        const present: Array<[ProviderName, string]> = [];
+        const missing: Array<[ProviderName, string]> = [];
 
-        if (!existsSomewhere && Object.keys(m.byProvider).length) {
-          // Tombstone the mapped ids (defensive), then remove mapping.
-          for (const [prov, pid] of Object.entries(m.byProvider) as Array<[ProviderName, string]>) {
-            if (!pid) continue;
+        for (const [prov, pid] of Object.entries(m.byProvider) as Array<[ProviderName, string]>) {
+          if (!pid) continue;
+          const snap = snapshots.get(prov);
+          if (!snap) continue; // provider not healthy, skip
+          if (snap.index.has(pid)) {
+            present.push([prov, pid]);
+          } else {
+            missing.push([prov, pid]);
+          }
+        }
+
+        if (present.length === 0 && missing.length > 0) {
+          // Missing in ALL providers → orphan. Tombstone and remove mapping.
+          for (const [prov, pid] of missing) {
             this.store.addTombstone(state, prov, pid);
           }
           this.store.removeMapping(state, m.canonicalId);
+          continue;
+        }
+
+        // External deletion: task was previously synced (has canonical baseline)
+        // and is now missing from at least one provider that had it mapped.
+        if (missing.length > 0 && m.canonical && lastSyncAt) {
+          // Treat as intentional deletion — tombstone ALL sides and propagate.
+          for (const [prov, pid] of [...present, ...missing]) {
+            this.store.addTombstone(state, prov, pid);
+          }
+          tombstoneCanonicalIds.add(m.canonicalId);
+
+          // Delete from providers that still have the task.
+          for (const [prov, pid] of present) {
+            const provider = healthyProviders.find((p) => p.name === prov);
+            if (!provider) continue;
+            push({
+              kind: 'delete',
+              executed: !dryRun,
+              source: { provider: missing[0]![0], id: missing[0]![1] },
+              target: { provider: prov, id: pid },
+              title: m.canonical.title,
+              detail: `external-delete: ${missing.map(([p, i]) => `${p}:${i}`).join(',')} missing`,
+            });
+            if (!dryRun) {
+              try {
+                await provider.deleteTask(pid);
+              } catch (e) {
+                errors.push({
+                  provider: prov,
+                  stage: 'write',
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }
+          }
         }
       }
 
@@ -316,7 +402,7 @@ export class SyncEngine {
           for (const f of fields) {
             const baseVal = baseline ? baseline[f] : undefined;
             const val = t[f];
-            if (baseVal !== val) set.add(f);
+            if (!fieldEqual(f, baseVal as string | undefined, val as string | undefined)) set.add(f);
           }
           if (set.size) changedBy.set(prov, set);
         }
@@ -373,6 +459,10 @@ export class SyncEngine {
 
         // Update canonical snapshot in state.
         this.store.upsertCanonicalSnapshot(state, m.canonicalId, canonical);
+
+        // Skip tasks with empty titles — some providers (Microsoft Graph) reject them,
+        // and they would cause persistent errors on every sync cycle.
+        if (!canonical.title?.trim()) continue;
 
         // Fan out canonical to all targets.
         for (const target of healthyProviders) {
@@ -451,12 +541,12 @@ export class SyncEngine {
             continue;
           }
 
-          // Update only if any field differs.
+          // Update only if any field differs (using semantic comparison).
           const differs =
-            existing.title !== canonical.title ||
-            existing.notes !== canonical.notes ||
-            existing.dueAt !== canonical.dueAt ||
-            existing.status !== canonical.status;
+            !fieldEqual('title', existing.title, canonical.title) ||
+            !fieldEqual('notes', existing.notes, canonical.notes) ||
+            !fieldEqual('dueAt', existing.dueAt, canonical.dueAt) ||
+            !fieldEqual('status', existing.status, canonical.status);
 
           if (!differs) {
             push({

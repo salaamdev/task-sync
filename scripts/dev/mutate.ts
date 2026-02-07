@@ -4,20 +4,19 @@ import type { Task } from '../../src/model.js';
 import type { TaskProvider } from '../../src/providers/provider.js';
 import { GoogleTasksProvider } from '../../src/providers/google.js';
 import { MicrosoftTodoProvider } from '../../src/providers/microsoft.js';
-import { HabiticaProvider } from '../../src/providers/habitica.js';
 
 /**
  * Dev helper: mutate a single task by exact title match.
  *
  * Usage:
- *   tsx scripts/dev/mutate.ts <google|microsoft|habitica> <delete|complete|activate|note> <title> [noteText]
+ *   tsx scripts/dev/mutate.ts <google|microsoft> <delete|complete|activate|note> <title> [noteText]
  */
 
-type ProviderKey = 'google' | 'microsoft' | 'habitica';
+type ProviderKey = 'google' | 'microsoft';
 type Action = 'delete' | 'complete' | 'activate' | 'note';
 
 function usage(): never {
-  console.error('Usage: tsx scripts/dev/mutate.ts <google|microsoft|habitica> <delete|complete|activate|note> <title> [noteText]');
+  console.error('Usage: tsx scripts/dev/mutate.ts <google|microsoft> <delete|complete|activate|note> <title> [noteText]');
   process.exit(2);
 }
 
@@ -43,12 +42,8 @@ async function main() {
     refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
     listId: env.TASK_SYNC_MS_LIST_ID,
   });
-  const habitica = new HabiticaProvider({
-    userId: env.TASK_SYNC_HABITICA_USER_ID!,
-    apiToken: env.TASK_SYNC_HABITICA_API_TOKEN!,
-  });
 
-  const map: Record<ProviderKey, TaskProvider> = { google, microsoft, habitica };
+  const map: Record<ProviderKey, TaskProvider> = { google, microsoft };
   const p = map[providerName];
 
   const tasks: Task[] = await p.listTasks();

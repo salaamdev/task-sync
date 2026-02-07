@@ -45,6 +45,8 @@ interface GraphTask {
   body?: GraphBody;
   dueDateTime?: { dateTime: string; timeZone: string };
   completedDateTime?: { dateTime: string; timeZone: string };
+  /** Graph To Do supports a status field. Completed date is derived server-side. */
+  status?: 'notStarted' | 'inProgress' | 'completed' | 'waitingOnOthers' | 'deferred' | string;
   lastModifiedDateTime: string;
   createdDateTime: string;
 }
@@ -54,19 +56,33 @@ interface GraphListTasksResponse {
   '@odata.nextLink'?: string;
 }
 
+/**
+ * Normalize fractional seconds in an ISO timestamp to 3 digits (milliseconds).
+ * e.g. "2026-02-08T00:00:00.0000000Z" → "2026-02-08T00:00:00.000Z"
+ */
+function normalizeIsoPrecision(iso: string): string {
+  return iso.replace(/\.(\d+)Z$/, (_match, frac: string) => {
+    const ms = (frac + '000').slice(0, 3);
+    return `.${ms}Z`;
+  });
+}
+
 function normalizeGraphDate(dt?: { dateTime: string; timeZone: string }): string | undefined {
   if (!dt?.dateTime) return undefined;
 
   // Microsoft Graph To Do uses a { dateTime, timeZone } pair.
   // Often dateTime is "YYYY-MM-DDTHH:mm:ss(.sss)" with NO timezone suffix.
   // Our canonical format expects RFC3339 / ISO with timezone (prefer Z for UTC).
-  const raw = dt.dateTime;
+  let raw = dt.dateTime;
 
-  // If already has timezone info, keep as-is.
-  if (/[zZ]$/.test(raw) || /[+-]\d\d:\d\d$/.test(raw)) return raw;
+  // If already has timezone info, normalize precision and return.
+  if (/[zZ]$/.test(raw) || /[+-]\d\d:\d\d$/.test(raw)) return normalizeIsoPrecision(raw);
 
   // Normalize UTC-like values to Z.
-  if (dt.timeZone?.toUpperCase() === 'UTC') return `${raw}Z`;
+  if (dt.timeZone?.toUpperCase() === 'UTC') {
+    raw = `${raw}Z`;
+    return normalizeIsoPrecision(raw);
+  }
 
   // Fallback: keep raw (better than guessing an offset).
   return raw;
@@ -77,7 +93,7 @@ function toCanonical(t: GraphTask): Task {
     id: t.id,
     title: t.title,
     notes: t.body?.content,
-    status: t.completedDateTime ? 'completed' : 'active',
+    status: t.status === 'completed' || t.completedDateTime ? 'completed' : 'active',
     dueAt: normalizeGraphDate(t.dueDateTime),
     updatedAt: t.lastModifiedDateTime,
   };
@@ -152,7 +168,17 @@ export class MicrosoftTodoProvider implements TaskProvider {
     const listId = await this.getListId();
 
     const out: Task[] = [];
-    let next: string | undefined = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100`;
+
+    // Build the initial URL. When `since` is provided, use a server-side
+    // OData $filter on lastModifiedDateTime so Graph only returns changed
+    // tasks instead of the full list.
+    let next: string | undefined;
+    if (since) {
+      const filter = `lastModifiedDateTime ge ${since}`;
+      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100&$filter=${encodeURIComponent(filter)}`;
+    } else {
+      next = `/me/todo/lists/${encodeURIComponent(listId)}/tasks?$top=100`;
+    }
 
     while (next) {
       const url = next;
@@ -161,9 +187,7 @@ export class MicrosoftTodoProvider implements TaskProvider {
       next = res['@odata.nextLink'];
     }
 
-    if (!since) return out;
-    const sinceMs = Date.parse(since);
-    return out.filter((t) => Date.parse(t.updatedAt) >= sinceMs);
+    return out;
   }
 
   async upsertTask(input: Omit<Task, 'updatedAt'> & { updatedAt?: string }): Promise<Task> {
@@ -184,7 +208,8 @@ export class MicrosoftTodoProvider implements TaskProvider {
             timeZone: 'UTC',
           }
         : undefined,
-      completedDateTime: input.status === 'completed' ? { dateTime: new Date().toISOString(), timeZone: 'UTC' } : undefined,
+      // Graph expects status mutations, not completedDateTime writes.
+      status: input.status === 'completed' ? 'completed' : 'notStarted',
     };
 
     const res = isCreate

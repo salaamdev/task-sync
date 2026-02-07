@@ -5,7 +5,6 @@ import { createLogger } from './log.js';
 import { MockProvider } from './providers/mock.js';
 import { GoogleTasksProvider } from './providers/google.js';
 import { MicrosoftTodoProvider } from './providers/microsoft.js';
-import { HabiticaProvider } from './providers/habitica.js';
 import { SyncEngine } from './sync/engine.js';
 import { JsonStore } from './store/jsonStore.js';
 
@@ -15,7 +14,7 @@ const program = new Command();
 
 program
   .name('task-sync')
-  .description('Sync tasks between providers (Google Tasks, Microsoft To Do, Habitica)')
+  .description('Sync tasks between Google Tasks and Microsoft To Do')
   .version('0.1.0');
 
 program
@@ -61,12 +60,12 @@ program
 
     const dryRun = !!opts.dryRun;
 
-    const providers = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B, env.TASK_SYNC_PROVIDER_C].filter(
+    const providers = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B].filter(
       Boolean,
-    ) as Array<'google' | 'microsoft' | 'habitica'>;
+    ) as Array<'google' | 'microsoft'>;
 
     if (providers.length < 2) {
-      console.error('Need at least 2 providers. Set TASK_SYNC_PROVIDER_A + TASK_SYNC_PROVIDER_B (and optional _C).');
+      console.error('Need at least 2 providers. Set TASK_SYNC_PROVIDER_A=google + TASK_SYNC_PROVIDER_B=microsoft.');
       process.exitCode = 2;
       return;
     }
@@ -78,7 +77,7 @@ program
       return;
     }
 
-    const makeProvider = (p: 'google' | 'microsoft' | 'habitica') => {
+    const makeProvider = (p: 'google' | 'microsoft') => {
       if (p === 'google') {
         return new GoogleTasksProvider({
           clientId: env.TASK_SYNC_GOOGLE_CLIENT_ID!,
@@ -87,17 +86,11 @@ program
           tasklistId: env.TASK_SYNC_GOOGLE_TASKLIST_ID,
         });
       }
-      if (p === 'microsoft') {
-        return new MicrosoftTodoProvider({
-          clientId: env.TASK_SYNC_MS_CLIENT_ID!,
-          tenantId: env.TASK_SYNC_MS_TENANT_ID!,
-          refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
-          listId: env.TASK_SYNC_MS_LIST_ID,
-        });
-      }
-      return new HabiticaProvider({
-        userId: env.TASK_SYNC_HABITICA_USER_ID!,
-        apiToken: env.TASK_SYNC_HABITICA_API_TOKEN!,
+      return new MicrosoftTodoProvider({
+        clientId: env.TASK_SYNC_MS_CLIENT_ID!,
+        tenantId: env.TASK_SYNC_MS_TENANT_ID!,
+        refreshToken: env.TASK_SYNC_MS_REFRESH_TOKEN!,
+        listId: env.TASK_SYNC_MS_LIST_ID,
       });
     };
 
@@ -161,7 +154,7 @@ program
 
 program
   .command('mock')
-  .description('Run a 3-provider dry-run using in-memory mock providers (for demos/tests)')
+  .description('Run a 2-provider dry-run using in-memory mock providers (for demos/tests)')
   .option('--format <format>', 'Output format: pretty|json', 'pretty')
   .action(async (opts: { format?: string }) => {
     const logger = createLogger('info');
@@ -179,10 +172,9 @@ program
       ],
     });
     const b = new MockProvider({ name: 'mockB', tasks: [] });
-    const c = new MockProvider({ name: 'habitica', tasks: [] });
 
-    logger.info('mock sync start', { providers: [a.name, b.name, c.name] });
-    const report = await engine.syncMany([a, b, c], { dryRun: true });
+    logger.info('mock sync start', { providers: [a.name, b.name] });
+    const report = await engine.syncMany([a, b], { dryRun: true });
 
     if ((opts.format ?? 'pretty') === 'json') {
       console.log(JSON.stringify(report, null, 2));

@@ -2,16 +2,15 @@ import { loadEnvFiles } from '../../src/env.js';
 import { readEnv } from '../../src/config.js';
 import { GoogleTasksProvider } from '../../src/providers/google.js';
 import { MicrosoftTodoProvider } from '../../src/providers/microsoft.js';
-import { HabiticaProvider } from '../../src/providers/habitica.js';
 import type { Task } from '../../src/model.js';
 
 const PREFIX = '[task-sync e2e]';
 
-type ProviderKey = 'google' | 'microsoft' | 'habitica';
+type ProviderKey = 'google' | 'microsoft';
 
 function usage(): never {
   console.error('Usage: tsx scripts/dev/e2e.ts <seed|list|cleanup> [provider]');
-  console.error('  provider optional: google|microsoft|habitica (default: all configured)');
+  console.error('  provider optional: google|microsoft (default: all configured)');
   process.exit(2);
 }
 
@@ -38,20 +37,11 @@ function makeProviders(env: ReturnType<typeof readEnv>) {
     }),
   });
 
-  providers.set('habitica', {
-    name: 'habitica',
-    p: new HabiticaProvider({
-      userId: env.TASK_SYNC_HABITICA_USER_ID!,
-      apiToken: env.TASK_SYNC_HABITICA_API_TOKEN!,
-    }),
-  });
-
   return providers;
 }
 
 function configuredProviders(env: ReturnType<typeof readEnv>): ProviderKey[] {
-  const list = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B, env.TASK_SYNC_PROVIDER_C].filter(Boolean) as ProviderKey[];
-  // de-dupe
+  const list = [env.TASK_SYNC_PROVIDER_A, env.TASK_SYNC_PROVIDER_B].filter(Boolean) as ProviderKey[];
   return [...new Set(list)];
 }
 
@@ -86,7 +76,7 @@ async function main() {
 
   const configured = providerArg ? [providerArg] : configuredProviders(env);
   if (!configured.length) {
-    console.error('No providers configured. Set TASK_SYNC_PROVIDER_A/B(/C).');
+    console.error('No providers configured. Set TASK_SYNC_PROVIDER_A/B.');
     process.exit(2);
   }
 
