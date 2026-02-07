@@ -54,13 +54,31 @@ interface GraphListTasksResponse {
   '@odata.nextLink'?: string;
 }
 
+function normalizeGraphDate(dt?: { dateTime: string; timeZone: string }): string | undefined {
+  if (!dt?.dateTime) return undefined;
+
+  // Microsoft Graph To Do uses a { dateTime, timeZone } pair.
+  // Often dateTime is "YYYY-MM-DDTHH:mm:ss(.sss)" with NO timezone suffix.
+  // Our canonical format expects RFC3339 / ISO with timezone (prefer Z for UTC).
+  const raw = dt.dateTime;
+
+  // If already has timezone info, keep as-is.
+  if (/[zZ]$/.test(raw) || /[+-]\d\d:\d\d$/.test(raw)) return raw;
+
+  // Normalize UTC-like values to Z.
+  if (dt.timeZone?.toUpperCase() === 'UTC') return `${raw}Z`;
+
+  // Fallback: keep raw (better than guessing an offset).
+  return raw;
+}
+
 function toCanonical(t: GraphTask): Task {
   return {
     id: t.id,
     title: t.title,
     notes: t.body?.content,
     status: t.completedDateTime ? 'completed' : 'active',
-    dueAt: t.dueDateTime?.dateTime,
+    dueAt: normalizeGraphDate(t.dueDateTime),
     updatedAt: t.lastModifiedDateTime,
   };
 }
