@@ -54,6 +54,21 @@ function unpackNotes(notes?: string): { human?: string; meta?: Record<string, un
   }
 }
 
+function normalizeIso(iso?: string): string | undefined {
+  if (!iso) return undefined;
+  // Habitica can return fractional seconds with 7 digits, e.g. ".0000000Z".
+  // Normalize to RFC3339 milliseconds to keep other providers (notably Google Tasks) happy.
+  // Examples:
+  // - 2026-02-08T00:00:00.0000000Z -> 2026-02-08T00:00:00.000Z
+  // - 2026-02-08T00:00:00.1234567Z -> 2026-02-08T00:00:00.123Z
+  const m = iso.match(/^(.*?)(\.(\d+))Z$/);
+  if (!m) return iso;
+  const base = m[1];
+  const frac = m[3] ?? '';
+  const ms = (frac + '000').slice(0, 3);
+  return `${base}.${ms}Z`;
+}
+
 function toCanonical(t: HabiticaTask): Task {
   const unpacked = unpackNotes(t.notes);
   return {
@@ -61,7 +76,7 @@ function toCanonical(t: HabiticaTask): Task {
     title: t.text,
     notes: unpacked.human,
     status: t.completed ? 'completed' : 'active',
-    dueAt: t.date,
+    dueAt: normalizeIso(t.date),
     updatedAt: t.updatedAt,
   };
 }
