@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { writeFile, mkdir, rm, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, rm, readFile, stat } from 'node:fs/promises';
 
 const WEB_DIR = path.resolve(import.meta.dirname, '..', 'web');
 const STATE_DIR = path.resolve(import.meta.dirname, '..', '.task-sync-test-web');
@@ -48,6 +48,17 @@ beforeAll(async () => {
   // Write to project root .env (the web app reads from parent)
   await writeFile(path.resolve(import.meta.dirname, '..', '.env.test'), envContent);
 
+  // Ensure web dependencies exist in CI (root npm ci does not install ./web)
+  const webNodeModules = path.join(WEB_DIR, 'node_modules');
+  const hasWebDeps = await stat(webNodeModules).then(() => true).catch(() => false);
+
+  // In GitHub Actions, the workflow does `npm ci` at repo root only.
+  // These E2E tests need ./web dependencies, so we install them here.
+  if (process.env.CI && !hasWebDeps) {
+    const res = spawnSync('npm', ['ci'], { cwd: WEB_DIR, stdio: 'inherit' });
+    if (res.status !== 0) throw new Error(`web npm ci failed: ${res.status}`);
+  }
+
   // Start a Next.js dev server (avoids requiring a pre-built .next directory in CI)
   server = spawn('npx', ['next', 'dev', '-p', String(PORT)], {
     cwd: WEB_DIR,
@@ -62,6 +73,9 @@ beforeAll(async () => {
     },
     stdio: 'pipe',
   });
+
+  server.stdout?.on('data', (d) => process.stdout.write(String(d)));
+  server.stderr?.on('data', (d) => process.stderr.write(String(d)));
 
   await waitForServer(`${BASE}/api/status`, 180_000);
 }, 180_000);

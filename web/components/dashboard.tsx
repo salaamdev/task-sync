@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -21,6 +21,8 @@ import {
   AlertCircle,
   ArrowRightLeft,
   Settings,
+  Timer,
+  Pause,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -52,6 +54,15 @@ interface SyncReport {
   durationMs: number;
 }
 
+const POLL_OPTIONS = [
+  { label: 'Off', value: 0 },
+  { label: '1m', value: 1 },
+  { label: '2m', value: 2 },
+  { label: '5m', value: 5 },
+  { label: '10m', value: 10 },
+  { label: '30m', value: 30 },
+] as const;
+
 /* ------------------------------------------------------------------ */
 /*  Dashboard                                                          */
 /* ------------------------------------------------------------------ */
@@ -62,6 +73,14 @@ export function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [lastReport, setLastReport] = useState<SyncReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Polling state
+  const [pollMinutes, setPollMinutes] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0;
+    return Number(localStorage.getItem('task-sync-poll') ?? '0');
+  });
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  const syncingRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -98,25 +117,76 @@ export function Dashboard() {
 
   /* Sync ----------------------------------------------------------- */
 
-  const handleSync = async () => {
+  const doSync = useCallback(async (silent = false) => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
     setSyncing(true);
-    setLastReport(null);
+    if (!silent) setLastReport(null);
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || 'Sync failed');
+        if (!silent) toast.error(data.error || 'Sync failed');
       } else {
-        setLastReport(data as SyncReport);
-        toast.success(`Synced in ${(data as SyncReport).durationMs}ms`);
+        const report = data as SyncReport;
+        setLastReport(report);
+        const changes =
+          (report.counts.create ?? 0) +
+          (report.counts.update ?? 0) +
+          (report.counts.delete ?? 0);
+        if (silent && changes > 0) {
+          toast.success(`Auto-sync: ${changes} change${changes !== 1 ? 's' : ''}`);
+        } else if (!silent) {
+          toast.success(`Synced in ${report.durationMs}ms`);
+        }
         fetchStatus();
       }
     } catch {
-      toast.error('Sync request failed');
+      if (!silent) toast.error('Sync request failed');
     } finally {
       setSyncing(false);
+      syncingRef.current = false;
     }
-  };
+  }, [fetchStatus]);
+
+  const handleSync = () => doSync(false);
+
+  /* Polling --------------------------------------------------------- */
+
+  const changePollInterval = useCallback(
+    (minutes: number) => {
+      setPollMinutes(minutes);
+      localStorage.setItem('task-sync-poll', String(minutes));
+      if (minutes > 0) {
+        setSecondsLeft(minutes * 60);
+        toast.success(`Auto-sync every ${minutes} minute${minutes > 1 ? 's' : ''}`);
+      } else {
+        setSecondsLeft(0);
+        toast.success('Auto-sync disabled');
+      }
+    },
+    [],
+  );
+
+  // Countdown timer + auto-sync trigger
+  useEffect(() => {
+    if (pollMinutes <= 0) return;
+
+    setSecondsLeft(pollMinutes * 60);
+
+    const interval = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          // Trigger sync
+          doSync(true);
+          return pollMinutes * 60; // Reset countdown
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [pollMinutes, doSync]);
 
   /* Disconnect ------------------------------------------------------ */
 
@@ -234,7 +304,8 @@ TASK_SYNC_MS_TENANT_ID=consumers`}
               : 'Connect both providers to enable sync.'}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-5">
+          {/* Sync Now button */}
           <div className="flex justify-center">
             <Button
               size="lg"
@@ -255,6 +326,45 @@ TASK_SYNC_MS_TENANT_ID=consumers`}
             </Button>
           </div>
 
+          {/* Auto-sync polling selector */}
+          {bothConnected && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Timer className="h-3.5 w-3.5" />
+                <span>Auto-sync</span>
+              </div>
+              <div className="flex items-center justify-center gap-1.5">
+                {POLL_OPTIONS.map((opt) => (
+                  <Button
+                    key={opt.value}
+                    variant={pollMinutes === opt.value ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() => changePollInterval(opt.value)}
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+              </div>
+              {pollMinutes > 0 && (
+                <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                  {syncing ? (
+                    <>
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      Syncing…
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="h-3 w-3" />
+                      Next sync in {formatCountdown(secondsLeft)}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Last sync info */}
           {status?.lastSync && (
             <p className="text-center text-sm text-muted-foreground">
               Last synced:{' '}
@@ -288,6 +398,17 @@ TASK_SYNC_MS_TENANT_ID=consumers`}
       </footer>
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+function formatCountdown(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
 /* ------------------------------------------------------------------ */
