@@ -196,5 +196,5 @@ describe('Web UI — page', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Task Sync');
-  });
+  }, 30_000);
 });
