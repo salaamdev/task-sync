@@ -98,7 +98,7 @@ If you use both Google Tasks and Microsoft To Do — maybe Google Tasks on your 
 │                                                         │
 │  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐ │
 │  │   CLI    │   │   Web UI     │   │  Sync Engine     │ │
-│  │ (cli.ts) │──▶│ (Next.js 15) │──▶│  (engine.ts)     │ │
+│  │ (cli.ts) │──▶│ (Next.js 15) │──▶│  (engine.ts)    │ │
 │  └──────────┘   └──────────────┘   │                  │ │
 │                                    │  Cold-start match│ │
 │                                    │  Conflict resolve│ │
@@ -107,10 +107,10 @@ If you use both Google Tasks and Microsoft To Do — maybe Google Tasks on your 
 │                                             │           │
 │                    ┌────────────────────────┼──────┐    │
 │                    │                        │      │    │
-│              ┌─────▼─────┐          ┌──────▼────┐ │    │
-│              │  Google    │          │ Microsoft │ │    │
-│              │  Tasks API │          │ Graph API │ │    │
-│              └───────────┘          └───────────┘ │    │
+│              ┌─────▼─────┐           ┌──────▼────┐ │    │
+│              │ Google    │           │ Microsoft │ │    │
+│              │ Tasks API │           │ Graph API │ │    │
+│              └───────────┘           └───────────┘ │    │
 │                    │                        │      │    │
 │                    └────────────────────────┘      │    │
 │                          Providers                 │    │
