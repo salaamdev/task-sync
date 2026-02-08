@@ -92,35 +92,7 @@ If you use both Google Tasks and Microsoft To Do — maybe Google Tasks on your 
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                       Task Sync                         │
-│                                                         │
-│  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐ │
-│  │   CLI    │   │   Web UI     │   │  Sync Engine     │ │
-│  │ (cli.ts) │──▶│ (Next.js 15) │──▶│  (engine.ts)    │ │
-│  └──────────┘   └──────────────┘   │                  │ │
-│                                    │  Cold-start match│ │
-│                                    │  Conflict resolve│ │
-│                                    │  Delete propagate│ │
-│                                    └────────┬─────────┘ │
-│                                             │           │
-│                    ┌────────────────────────┼──────┐    │
-│                    │                        │      │    │
-│              ┌─────▼─────┐           ┌──────▼────┐ │    │
-│              │ Google    │           │ Microsoft │ │    │
-│              │ Tasks API │           │ Graph API │ │    │
-│              └───────────┘           └───────────┘ │    │
-│                    │                        │      │    │
-│                    └────────────────────────┘      │    │
-│                          Providers                 │    │
-│                                                    │    │
-│              ┌──────────────────────┐              │    │
-│              │   JSON State Store   │──────────────┘    │
-│              │  (.task-sync/state)  │                   │
-│              └──────────────────────┘                   │
-└─────────────────────────────────────────────────────────┘
-```
+<img width="978" height="477" alt="image" src="https://github.com/user-attachments/assets/f60b5d24-fc19-473c-a7c2-b9c93107715f" />
 
 The engine is provider-agnostic. Google and Microsoft are implemented as `TaskProvider` interfaces, making it straightforward to add new providers in the future.
 
