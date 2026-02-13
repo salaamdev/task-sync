@@ -272,8 +272,6 @@ export class MicrosoftTodoProvider implements TaskProvider {
 
     // Extended fields — only include if they have values.
     // For PATCH (updates), omitting a field means "don't change it".
-    // This avoids overwriting server-managed fields like recurrence
-    // with reconstructed values that may differ in startDate, etc.
     if (input.reminder) {
       payload.isReminderOn = true;
       payload.reminderDateTime = { dateTime: input.reminder, timeZone: 'UTC' };
@@ -288,11 +286,28 @@ export class MicrosoftTodoProvider implements TaskProvider {
       payload.startDateTime = { dateTime: input.startAt, timeZone: 'UTC' };
     }
 
-    // Recurrence: only set on CREATE. For PATCH, let Microsoft manage it
-    // to avoid conflicts with server-side recurrence state.
-    if (isCreate && input.recurrence) {
-      const rec = deserializeRecurrence(input.recurrence);
-      if (rec) payload.recurrence = rec;
+    // Recurrence: preserve on both create and update so existing one-time
+    // tasks can be corrected back into their recurring series.
+    if (input.recurrence) {
+      const rec = deserializeRecurrence(input.recurrence, {
+        fallbackStartDate: input.dueAt?.split('T')[0],
+      });
+      if (rec) {
+        if (!isCreate) {
+          // Microsoft Graph PATCH quirk:
+          // - requires dueDateTime when setting recurrence
+          // - rejects recurrence.range.startDate on PATCH (400 InvalidModel)
+          const startDate = rec.range.startDate;
+
+          if (!payload.dueDateTime && startDate) {
+            payload.dueDateTime = { dateTime: `${startDate}T12:00:00.000Z`, timeZone: 'UTC' };
+          }
+
+          delete rec.range.startDate;
+        }
+
+        payload.recurrence = rec;
+      }
     }
 
     // Remove undefined values (don't send to API)

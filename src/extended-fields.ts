@@ -3,7 +3,7 @@
  *
  * When syncing to a provider that doesn't natively support certain fields
  * (e.g., Google Tasks lacks reminders, recurrence, categories), those fields
- * are encoded as a human-readable metadata block at the end of the notes field.
+ * are encoded in a metadata block at the end of the notes field.
  *
  * The block is delimited by [task-sync] ... [/task-sync] markers.
  */
@@ -69,10 +69,12 @@ function parseBlock(block: string): ExtendedFields {
       inSteps = false;
     }
 
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-    const key = trimmed.slice(0, colonIdx).trim().toLowerCase();
-    const value = trimmed.slice(colonIdx + 1).trim();
+    // Accept both "key: value" and legacy "key=value" styles.
+    const kv = trimmed.match(/^([a-zA-Z_]+)\s*[:=]\s*(.+)$/);
+    if (!kv) continue;
+
+    const key = kv[1]!.trim().toLowerCase();
+    const value = kv[2]!.trim();
 
     switch (key) {
       case 'due_time':
@@ -82,13 +84,28 @@ function parseBlock(block: string): ExtendedFields {
         // Accept both ISO and human-readable; store as-is (provider will parse)
         fields.reminder = value;
         break;
-      case 'repeat':
-      case 'recurrence':
-        // Accept both RRULE and human-readable; try to detect RRULE
-        fields.recurrence = value.includes('FREQ=') ? value : parseHumanRecurrence(value) ?? value;
+      case 'repeat': {
+        // Keep backward-compat for old human-readable recurrence lines, but
+        // don't clobber an explicit machine recurrence if one was parsed.
+        if (!fields.recurrence) {
+          const rec = /\bFREQ=/i.test(value)
+            ? normalizeRuleTokens(value)
+            : parseHumanRecurrence(value) ?? value;
+          fields.recurrence = rec;
+        }
         break;
+      }
+      case 'recurrence':
+      case 'rrule':
+      case 'recurrence_raw': {
+        const rec = /\bFREQ=/i.test(value)
+          ? normalizeRuleTokens(value)
+          : parseHumanRecurrence(value) ?? value;
+        fields.recurrence = rec;
+        break;
+      }
       case 'categories':
-        fields.categories = value.split(',').map(s => s.trim()).filter(Boolean);
+        fields.categories = value.split(',').map((s) => s.trim()).filter(Boolean);
         break;
       case 'importance':
       case 'priority':
@@ -110,7 +127,6 @@ function parseBlock(block: string): ExtendedFields {
 /**
  * Embed extended fields as a metadata block at the end of notes.
  * Only includes fields that have non-default values.
- * Uses human-readable labels but keeps machine-parseable values.
  */
 export function embedMetadata(notes: string, fields: ExtendedFields): string {
   // Strip any existing block first
@@ -120,7 +136,8 @@ export function embedMetadata(notes: string, fields: ExtendedFields): string {
 
   if (fields.dueTime)                                       lines.push(`due_time: ${fields.dueTime}`);
   if (fields.reminder)                                      lines.push(`reminder: ${fields.reminder}`);
-  if (fields.recurrence)                                    lines.push(`repeat: ${formatRecurrenceHuman(fields.recurrence)}`);
+  // Persist recurrence as machine-safe RRULE-like text for lossless round-trip.
+  if (fields.recurrence)                                    lines.push(`recurrence: ${normalizeRuleTokens(fields.recurrence)}`);
   if (fields.categories?.length)                            lines.push(`categories: ${fields.categories.join(', ')}`);
   if (fields.importance && fields.importance !== 'normal')  lines.push(`importance: ${fields.importance}`);
   if (fields.startAt)                                       lines.push(`start: ${fields.startAt}`);
@@ -135,81 +152,6 @@ export function embedMetadata(notes: string, fields: ExtendedFields): string {
 
   const block = `${BLOCK_START}\n${lines.join('\n')}\n${BLOCK_END}`;
   return cleanNotes ? `${cleanNotes}\n\n${block}` : block;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Human-readable formatting helpers                                  */
-/* ------------------------------------------------------------------ */
-
-const DAY_NAMES: Record<string, string> = {
-  MO: 'Mon', TU: 'Tue', WE: 'Wed', TH: 'Thu', FR: 'Fri', SA: 'Sat', SU: 'Sun',
-};
-
-/** Format an RRULE string into a human-readable description. */
-function formatRecurrenceHuman(rule: string): string {
-  const parts = new Map(
-    rule.split(';').map(p => {
-      const eq = p.indexOf('=');
-      return (eq === -1 ? [p, ''] : [p.slice(0, eq), p.slice(eq + 1)]) as [string, string];
-    }),
-  );
-
-  const freq = parts.get('FREQ') ?? '';
-  const interval = Number(parts.get('INTERVAL')) || 1;
-  const byday = parts.get('BYDAY');
-  const bymonthday = parts.get('BYMONTHDAY');
-  const until = parts.get('UNTIL');
-  const count = parts.get('COUNT');
-
-  let result = '';
-
-  // Frequency
-  const freqMap: Record<string, [string, string]> = {
-    DAILY: ['daily', 'days'],
-    WEEKLY: ['weekly', 'weeks'],
-    MONTHLY: ['monthly', 'months'],
-    YEARLY: ['yearly', 'years'],
-  };
-  const [single, plural] = freqMap[freq] ?? [freq.toLowerCase(), freq.toLowerCase()];
-  result = interval === 1 ? `Every ${single.replace('ly', '')}` : `Every ${interval} ${plural}`;
-  if (interval === 1) {
-    result = freq === 'DAILY' ? 'Daily' : freq === 'WEEKLY' ? 'Weekly' : freq === 'MONTHLY' ? 'Monthly' : freq === 'YEARLY' ? 'Yearly' : result;
-  }
-
-  // Days of week
-  if (byday) {
-    const days = byday.split(',');
-    const weekdays = ['MO', 'TU', 'WE', 'TH', 'FR'];
-    const weekend = ['SA', 'SU'];
-    if (days.length === 5 && weekdays.every(d => days.includes(d))) {
-      result += ' on weekdays';
-    } else if (days.length === 2 && weekend.every(d => days.includes(d))) {
-      result += ' on weekends';
-    } else {
-      result += ` on ${days.map(d => DAY_NAMES[d] ?? d).join(', ')}`;
-    }
-  }
-
-  // Day of month
-  if (bymonthday) result += ` on day ${bymonthday}`;
-
-  // End condition
-  if (until) result += ` until ${formatDateHuman(until)}`;
-  else if (count) result += ` (${count} times)`;
-
-  return result;
-}
-
-/** Format a date string (ISO or YYYY-MM-DD) to "Mon DD, YYYY". */
-function formatDateHuman(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
-  } catch {
-    return iso;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,7 +214,7 @@ export function serializeRecurrence(rec: GraphRecurrence): string {
   if (p.interval > 1) parts.push(`INTERVAL=${p.interval}`);
 
   if (p.daysOfWeek?.length) {
-    parts.push(`BYDAY=${p.daysOfWeek.map(d => DAY_TO_ABBR[d] ?? d.slice(0, 2).toUpperCase()).join(',')}`);
+    parts.push(`BYDAY=${p.daysOfWeek.map((d) => DAY_TO_ABBR[d] ?? d.slice(0, 2).toUpperCase()).join(',')}`);
   }
   if (p.dayOfMonth && (p.type === 'absoluteMonthly' || p.type === 'absoluteYearly')) {
     parts.push(`BYMONTHDAY=${p.dayOfMonth}`);
@@ -283,20 +225,36 @@ export function serializeRecurrence(rec: GraphRecurrence): string {
   if (p.index && (p.type === 'relativeMonthly' || p.type === 'relativeYearly')) {
     parts.push(`BYSETPOS=${POS_TO_STR[p.index] ?? p.index}`);
   }
+  if (p.firstDayOfWeek) {
+    const first = p.firstDayOfWeek.toLowerCase();
+    parts.push(`WKST=${DAY_TO_ABBR[first] ?? first.slice(0, 2).toUpperCase()}`);
+  }
 
   const r = rec.range;
+  if (r.startDate) parts.push(`DTSTART=${r.startDate}`);
   if (r.type === 'endDate' && r.endDate) parts.push(`UNTIL=${r.endDate}`);
   else if (r.type === 'numbered' && r.numberOfOccurrences) parts.push(`COUNT=${r.numberOfOccurrences}`);
+  if (r.recurrenceTimeZone) parts.push(`TZID=${r.recurrenceTimeZone}`);
 
-  return parts.join(';');
+  return normalizeRuleTokens(parts.join(';'));
+}
+
+export interface DeserializeRecurrenceOptions {
+  fallbackStartDate?: string;
 }
 
 /** Deserialize an RRULE-like string back to a Microsoft Graph recurrence object. */
-export function deserializeRecurrence(rule: string): GraphRecurrence | null {
+export function deserializeRecurrence(rule: string, opts?: DeserializeRecurrenceOptions): GraphRecurrence | null {
   if (!rule) return null;
 
+  const normalized = normalizeRuleTokens(rule);
+  const parseable = /\bFREQ=/i.test(normalized)
+    ? normalized
+    : parseHumanRecurrence(rule);
+  if (!parseable) return null;
+
   const parts = new Map(
-    rule.split(';').map(p => {
+    parseable.split(';').map((p) => {
       const eq = p.indexOf('=');
       return (eq === -1 ? [p, ''] : [p.slice(0, eq), p.slice(eq + 1)]) as [string, string];
     }),
@@ -305,13 +263,19 @@ export function deserializeRecurrence(rule: string): GraphRecurrence | null {
   const freq = parts.get('FREQ')?.toLowerCase();
   if (!freq) return null;
 
-  const interval = Number(parts.get('INTERVAL')) || 1;
-  const byday = parts.get('BYDAY')?.split(',');
+  const interval = Math.max(1, Number(parts.get('INTERVAL')) || 1);
+  const byday = parts.get('BYDAY')
+    ?.split(',')
+    .map((d) => d.trim().toUpperCase())
+    .filter(Boolean);
   const bymonthday = Number(parts.get('BYMONTHDAY')) || undefined;
   const bymonth = Number(parts.get('BYMONTH')) || undefined;
   const bysetpos = parts.get('BYSETPOS');
   const until = parts.get('UNTIL');
   const count = Number(parts.get('COUNT')) || undefined;
+  const dtstart = parts.get('DTSTART');
+  const tzid = parts.get('TZID');
+  const wkst = parts.get('WKST');
 
   let type: string;
   if (freq === 'daily') type = 'daily';
@@ -324,17 +288,18 @@ export function deserializeRecurrence(rule: string): GraphRecurrence | null {
     pattern: {
       type,
       interval,
-      daysOfWeek: byday?.map(d => ABBR_TO_DAY[d] ?? d.toLowerCase()),
+      daysOfWeek: byday?.map((d) => ABBR_TO_DAY[d] ?? d.toLowerCase()),
       dayOfMonth: bymonthday,
       month: bymonth,
-      firstDayOfWeek: 'sunday',
+      firstDayOfWeek: wkst ? (ABBR_TO_DAY[wkst] ?? wkst.toLowerCase()) : 'sunday',
       index: bysetpos ? STR_TO_POS[bysetpos] : undefined,
     },
     range: {
       type: until ? 'endDate' : count ? 'numbered' : 'noEnd',
-      startDate: new Date().toISOString().split('T')[0],
+      startDate: dtstart ?? opts?.fallbackStartDate ?? new Date().toISOString().split('T')[0],
       endDate: until,
       numberOfOccurrences: count,
+      recurrenceTimeZone: tzid,
     },
   };
 }
@@ -343,29 +308,140 @@ export function deserializeRecurrence(rule: string): GraphRecurrence | null {
 /*  Date / time helpers                                                */
 /* ------------------------------------------------------------------ */
 
+function normalizeRuleTokens(rule: string): string {
+  const withoutPrefix = rule.trim().replace(/^RRULE:/i, '');
+
+  return withoutPrefix
+    .split(';')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => {
+      const eq = segment.indexOf('=');
+      if (eq === -1) return segment.toUpperCase();
+
+      const key = segment.slice(0, eq).trim().toUpperCase();
+      let rawValue = segment.slice(eq + 1).trim();
+
+      if (key === 'BYDAY') {
+        const days = rawValue
+          .split(',')
+          .map((d) => d.trim().toUpperCase())
+          .filter(Boolean);
+        rawValue = days.join(',');
+      } else if (key === 'FREQ' || key === 'WKST') {
+        rawValue = rawValue.toUpperCase();
+      }
+
+      return `${key}=${rawValue}`;
+    })
+    .join(';');
+}
+
 /**
  * Try to parse a human-readable recurrence back to RRULE.
- * This is best-effort — if we can't parse, return null and store as-is.
+ * This is best-effort — if we can't parse, return null.
  */
 function parseHumanRecurrence(text: string): string | null {
-  const lower = text.toLowerCase().trim();
-  if (lower.startsWith('daily')) return 'FREQ=DAILY';
-  if (lower.startsWith('weekly on weekdays')) return 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
-  if (lower.startsWith('weekly on weekends')) return 'FREQ=WEEKLY;BYDAY=SA,SU';
-  if (lower.startsWith('weekly')) {
-    const dayMatch = text.match(/on\s+(.+?)(\s+until|\s+\(|$)/i);
-    if (dayMatch) {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  let freq: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY' | null = null;
+  let interval = 1;
+
+  if (lower.startsWith('daily')) freq = 'DAILY';
+  else if (lower.startsWith('weekly')) freq = 'WEEKLY';
+  else if (lower.startsWith('monthly')) freq = 'MONTHLY';
+  else if (lower.startsWith('yearly')) freq = 'YEARLY';
+  else {
+    const everyCount = trimmed.match(/^every\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)\b/i);
+    if (everyCount) {
+      interval = Math.max(1, Number(everyCount[1]));
+      const unit = everyCount[2]!.toLowerCase();
+      if (unit.startsWith('day')) freq = 'DAILY';
+      else if (unit.startsWith('week')) freq = 'WEEKLY';
+      else if (unit.startsWith('month')) freq = 'MONTHLY';
+      else if (unit.startsWith('year')) freq = 'YEARLY';
+    } else {
+      const everySingle = trimmed.match(/^every\s+(day|week|month|year)\b/i);
+      if (everySingle) {
+        const unit = everySingle[1]!.toLowerCase();
+        if (unit === 'day') freq = 'DAILY';
+        else if (unit === 'week') freq = 'WEEKLY';
+        else if (unit === 'month') freq = 'MONTHLY';
+        else if (unit === 'year') freq = 'YEARLY';
+      }
+    }
+  }
+
+  if (!freq) return null;
+
+  const parts: string[] = [`FREQ=${freq}`];
+  if (interval > 1) parts.push(`INTERVAL=${interval}`);
+
+  if (/\bon weekdays\b/i.test(trimmed)) {
+    parts.push('BYDAY=MO,TU,WE,TH,FR');
+  } else if (/\bon weekends\b/i.test(trimmed)) {
+    parts.push('BYDAY=SA,SU');
+  } else {
+    const dayOfMonthMatch = trimmed.match(/\bon day\s+([1-9]|[12][0-9]|3[01])\b/i);
+    if (dayOfMonthMatch && (freq === 'MONTHLY' || freq === 'YEARLY')) {
+      parts.push(`BYMONTHDAY=${dayOfMonthMatch[1]}`);
+    }
+
+    const dayMatch = trimmed.match(/\bon\s+(.+?)(?:\s+until|\s+\(\d+\s+times\)|$)/i);
+    if (dayMatch && !/^day\s+\d+/i.test(dayMatch[1]!.trim())) {
       const nameToAbbr: Record<string, string> = {
         mon: 'MO', tue: 'TU', wed: 'WE', thu: 'TH', fri: 'FR', sat: 'SA', sun: 'SU',
       };
-      const days = dayMatch[1].split(',').map(d => nameToAbbr[d.trim().toLowerCase().slice(0, 3)] ?? '').filter(Boolean);
-      if (days.length) return `FREQ=WEEKLY;BYDAY=${days.join(',')}`;
+      const days = dayMatch[1]!
+        .replace(/\band\b/gi, ',')
+        .split(',')
+        .map((d) => nameToAbbr[d.trim().toLowerCase().slice(0, 3)] ?? '')
+        .filter(Boolean);
+      if (days.length) parts.push(`BYDAY=${days.join(',')}`);
     }
-    return 'FREQ=WEEKLY';
   }
-  if (lower.startsWith('monthly')) return 'FREQ=MONTHLY';
-  if (lower.startsWith('yearly')) return 'FREQ=YEARLY';
-  return null;
+
+  const untilMatch = trimmed.match(/\buntil\s+(.+?)(?:\s+\(\d+\s+times\)|$)/i);
+  if (untilMatch) {
+    const untilDate = parseDateToIsoDate(untilMatch[1]!);
+    if (untilDate) parts.push(`UNTIL=${untilDate}`);
+  }
+
+  const countMatch = trimmed.match(/\((\d+)\s+times\)/i);
+  if (countMatch) {
+    const count = Number(countMatch[1]);
+    if (count > 0) parts.push(`COUNT=${count}`);
+  }
+
+  return normalizeRuleTokens(parts.join(';'));
+}
+
+function parseDateToIsoDate(input: string): string | null {
+  const raw = input.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const named = raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})$/);
+  if (named) {
+    const mon = named[1]!.slice(0, 3).toLowerCase();
+    const monthMap: Record<string, string> = {
+      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+    };
+    const mm = monthMap[mon];
+    if (!mm) return null;
+    const dd = named[2]!.padStart(2, '0');
+    const yyyy = named[3]!;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return null;
+  const d = new Date(parsed);
+  const yyyy = String(d.getUTCFullYear());
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 /** Extract HH:MM time from an ISO datetime string. Returns undefined for midnight. */
