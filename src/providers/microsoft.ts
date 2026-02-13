@@ -292,7 +292,22 @@ export class MicrosoftTodoProvider implements TaskProvider {
       const rec = deserializeRecurrence(input.recurrence, {
         fallbackStartDate: input.dueAt?.split('T')[0],
       });
-      if (rec) payload.recurrence = rec;
+      if (rec) {
+        if (!isCreate) {
+          // Microsoft Graph PATCH quirk:
+          // - requires dueDateTime when setting recurrence
+          // - rejects recurrence.range.startDate on PATCH (400 InvalidModel)
+          const startDate = rec.range.startDate;
+
+          if (!payload.dueDateTime && startDate) {
+            payload.dueDateTime = { dateTime: `${startDate}T12:00:00.000Z`, timeZone: 'UTC' };
+          }
+
+          delete rec.range.startDate;
+        }
+
+        payload.recurrence = rec;
+      }
     }
 
     // Remove undefined values (don't send to API)
