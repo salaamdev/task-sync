@@ -35,6 +35,20 @@ describe('MicrosoftTodoProvider', () => {
               title: 'Hi',
               body: { content: 'B', contentType: 'text' },
               dueDateTime: { dateTime: '2026-02-10T00:00:00.000Z', timeZone: 'UTC' },
+              recurrence: {
+                pattern: {
+                  type: 'weekly',
+                  interval: 2,
+                  daysOfWeek: ['monday', 'thursday'],
+                  firstDayOfWeek: 'monday',
+                },
+                range: {
+                  type: 'numbered',
+                  startDate: '2026-02-01',
+                  numberOfOccurrences: 10,
+                  recurrenceTimeZone: 'UTC',
+                },
+              },
               lastModifiedDateTime: '2026-02-06T00:00:00.000Z',
               createdDateTime: '2026-02-01T00:00:00.000Z',
             },
@@ -60,7 +74,81 @@ describe('MicrosoftTodoProvider', () => {
       notes: 'B',
       status: 'active',
       dueAt: '2026-02-10T12:00:00.000Z',
+      recurrence: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH;WKST=MO;DTSTART=2026-02-01;COUNT=10;TZID=UTC',
       updatedAt: '2026-02-06T00:00:00.000Z',
     });
+  });
+
+  it('sends recurrence on PATCH so one-time tasks can be repaired to recurring', async () => {
+    let patchBody: Record<string, unknown> | undefined;
+
+    const fetcher: typeof fetch = async (url, init) => {
+      const u = String(url);
+      const method = init?.method ?? 'GET';
+
+      if (u.includes('/oauth2/v2.0/token')) {
+        return jsonResponse({
+          token_type: 'Bearer',
+          scope: 'Tasks.ReadWrite User.Read',
+          expires_in: 3600,
+          ext_expires_in: 3600,
+          access_token: 'atok',
+        });
+      }
+
+      if (u === 'https://graph.microsoft.com/v1.0/me/todo/lists') {
+        return jsonResponse({ value: [{ id: 'L1', displayName: 'Tasks' }] });
+      }
+
+      if (method === 'PATCH' && u === 'https://graph.microsoft.com/v1.0/me/todo/lists/L1/tasks/m1') {
+        patchBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return jsonResponse({
+          id: 'm1',
+          title: patchBody.title,
+          body: { content: '', contentType: 'text' },
+          recurrence: patchBody.recurrence,
+          lastModifiedDateTime: '2026-02-10T09:30:00.000Z',
+          createdDateTime: '2026-02-01T00:00:00.000Z',
+        });
+      }
+
+      return new Response('not found', { status: 404 });
+    };
+
+    const p = new MicrosoftTodoProvider({
+      clientId: 'cid',
+      tenantId: 'common',
+      refreshToken: 'rtok',
+      fetcher,
+      listId: 'L1',
+    });
+
+    const recurrence = 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH;WKST=MO;DTSTART=2026-02-01;COUNT=10;TZID=UTC';
+
+    const updated = await p.upsertTask({
+      id: 'm1',
+      title: 'Recurring task',
+      status: 'active',
+      dueAt: '2026-02-10T12:00:00.000Z',
+      recurrence,
+      updatedAt: '2026-02-10T09:30:00.000Z',
+    });
+
+    expect(patchBody?.recurrence).toMatchObject({
+      pattern: {
+        type: 'weekly',
+        interval: 2,
+        daysOfWeek: ['monday', 'thursday'],
+        firstDayOfWeek: 'monday',
+      },
+      range: {
+        type: 'numbered',
+        startDate: '2026-02-01',
+        numberOfOccurrences: 10,
+        recurrenceTimeZone: 'UTC',
+      },
+    });
+
+    expect(updated.recurrence).toBe(recurrence);
   });
 });
