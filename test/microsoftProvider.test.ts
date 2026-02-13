@@ -63,4 +63,84 @@ describe('MicrosoftTodoProvider', () => {
       updatedAt: '2026-02-06T00:00:00.000Z',
     });
   });
+
+  it('creates recurring tasks with recurrence payload preserved', async () => {
+    let capturedBody: unknown;
+
+    const fetcher: typeof fetch = async (url, init) => {
+      const u = String(url);
+
+      if (u.includes('/oauth2/v2.0/token')) {
+        return jsonResponse({
+          token_type: 'Bearer',
+          scope: 'Tasks.ReadWrite User.Read',
+          expires_in: 3600,
+          ext_expires_in: 3600,
+          access_token: 'atok',
+        });
+      }
+
+      if (u === 'https://graph.microsoft.com/v1.0/me/todo/lists') {
+        return jsonResponse({ value: [{ id: 'L1', displayName: 'Tasks' }] });
+      }
+
+      if (u === 'https://graph.microsoft.com/v1.0/me/todo/lists/L1/tasks' && init?.method === 'POST') {
+        capturedBody = init.body ? JSON.parse(String(init.body)) : undefined;
+        return jsonResponse({
+          id: 'm-created',
+          title: 'Recurring task',
+          status: 'notStarted',
+          recurrence: {
+            pattern: {
+              type: 'weekly',
+              interval: 2,
+              daysOfWeek: ['monday', 'wednesday'],
+              firstDayOfWeek: 'sunday',
+            },
+            range: {
+              type: 'noEnd',
+              startDate: '2026-02-10',
+              recurrenceTimeZone: 'UTC',
+            },
+          },
+          lastModifiedDateTime: '2026-02-06T00:00:00.000Z',
+          createdDateTime: '2026-02-06T00:00:00.000Z',
+        });
+      }
+
+      return new Response('not found', { status: 404 });
+    };
+
+    const p = new MicrosoftTodoProvider({
+      clientId: 'cid',
+      tenantId: 'common',
+      refreshToken: 'rtok',
+      fetcher,
+    });
+
+    await p.upsertTask({
+      id: '',
+      title: 'Recurring task',
+      status: 'active',
+      recurrence: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;DTSTART=2026-02-10;TZID=UTC',
+    });
+
+    const payload = capturedBody as {
+      recurrence?: {
+        pattern?: { type?: string; interval?: number; daysOfWeek?: string[] };
+        range?: { startDate?: string; recurrenceTimeZone?: string };
+      };
+    };
+
+    expect(payload.recurrence).toBeDefined();
+    expect(payload.recurrence?.pattern).toMatchObject({
+      type: 'weekly',
+      interval: 2,
+      daysOfWeek: ['monday', 'wednesday'],
+    });
+    expect(payload.recurrence?.range).toMatchObject({
+      startDate: '2026-02-10',
+      recurrenceTimeZone: 'UTC',
+    });
+  });
 });
